@@ -64,6 +64,7 @@ import { OPENAI_DEFAULT, API_PLATFORMS } from "./platforms.js";
 import { renderModelForm, bindModelForm, providerFormValue } from "./model-form.js";
 import { renderGitHubForm, bindGitHubForm, githubFormValue } from "./github-form.js";
 import { createUsagePanel } from "./usage-panel.js";
+import { createModelPicker } from "./model-picker.js";
 import { saveUsage, isUsageKey } from "./usage.js";
 
 const ICONS = {
@@ -202,6 +203,20 @@ function keyFor(provider) {
   return entry?.key || "";
 }
 const usagePanel = createUsagePanel({ provider: () => modelForBot(activeBot()), key: keyFor });
+const modelPicker = createModelPicker({
+  provider: () => modelForBot(activeBot()),
+  providers,
+  key: keyFor,
+  select(provider, model) {
+    if (ui.busy || ui.syncBusy || provider.model === model) return;
+    const scrollTop = document.querySelector(".chat-area")?.scrollTop || 0;
+    provider.model = model;
+    provider.updatedAt = now();
+    persist();
+    render();
+    document.querySelector(".chat-area").scrollTop = scrollTop;
+  },
+});
 function recordUsage(event) {
   try {
     saveUsage(event);
@@ -334,8 +349,7 @@ function renderMemberGroups() {
 }
 function render() {
   const bot = activeBot(),
-    conversation = currentChat(),
-    provider = modelForBot(bot);
+    conversation = currentChat();
   const syncLabels = {
     local: "本地保存",
     pending: "等待同步",
@@ -355,7 +369,7 @@ function render() {
   ${bootError ? `<div class="notice error-notice">${esc(bootError)} <button data-action="raw-backup">导出原始备份</button></div>` : ""}
   ${usagePanel.html()}
   <section class="chat-area" aria-label="聊天内容">${conversation?.messages.length ? `<div class="messages">${conversation.messages.map(renderMessage).join("")}</div>` : ""}</section>
-  <div class="composer-wrap">${ui.routing ? `<div class="activity-line">${icon("sparkles")}管家正在邀请合适的伙伴…</div>` : ""}<form class="composer" id="composer"><textarea id="message-input" aria-label="输入消息" placeholder="输入消息…" rows="2" maxlength="30000" ${ui.busy ? "disabled" : ""}>${esc(ui.draft)}</textarea><div class="composer-tools"><button class="route-chip" type="button" ${bot.id === "butler" ? 'data-action="route-toggle"' : "disabled"} title="${mode() === "auto" ? "点击固定当前角色" : "点击交给管家自动分配"}">${icon(bot.id === "butler" && mode() === "auto" ? "sparkles" : bot.icon)}${bot.id === "butler" && mode() === "auto" ? "管家自动分配" : esc(bot.name)}${bot.id === "butler" ? icon("chevron-down") : ""}</button><div><button class="model-note" type="button" data-action="settings" title="配置模型">${provider ? esc(provider.name) : "选择模型"}${icon("chevron-down")}</button><button class="send-button" type="${ui.busy ? "button" : "submit"}" ${ui.busy ? 'data-action="stop"' : ""} aria-label="${ui.busy ? "停止生成" : "发送消息"}">${icon(ui.busy ? "square" : "arrow-up")}</button></div></div></form></div></main>`;
+  <div class="composer-wrap">${ui.routing ? `<div class="activity-line">${icon("sparkles")}管家正在邀请合适的伙伴…</div>` : ""}<form class="composer" id="composer"><textarea id="message-input" aria-label="输入消息" placeholder="输入消息…" rows="2" maxlength="30000" ${ui.busy ? "disabled" : ""}>${esc(ui.draft)}</textarea><div class="composer-tools"><button class="route-chip" type="button" ${bot.id === "butler" ? 'data-action="route-toggle"' : "disabled"} title="${mode() === "auto" ? "点击固定当前角色" : "点击交给管家自动分配"}">${icon(bot.id === "butler" && mode() === "auto" ? "sparkles" : bot.icon)}${bot.id === "butler" && mode() === "auto" ? "管家自动分配" : esc(bot.name)}${bot.id === "butler" ? icon("chevron-down") : ""}</button><div>${modelPicker.html(ui.busy || ui.syncBusy)}<button class="send-button" type="${ui.busy ? "button" : "submit"}" ${ui.busy ? 'data-action="stop"' : ""} aria-label="${ui.busy ? "停止生成" : "发送消息"}">${icon(ui.busy ? "square" : "arrow-up")}</button></div></div></form></div></main>`;
   icons();
   const input = document.querySelector("#message-input");
   input.addEventListener("input", () => {
@@ -374,6 +388,7 @@ function render() {
     sendMessage();
   });
   usagePanel.refresh();
+  modelPicker.bind();
 }
 function renderMessage(message) {
   const bot = getBot(message.botId),
@@ -823,6 +838,7 @@ function showSettings(tab = "models") {
     bindModelForm(dialog, {
       providerId: providers().find((p) => p.id === ui.editingProvider)?.id || uid(),
       onUsage: recordUsage,
+      onModels: modelPicker.remember,
     });
     dialog.querySelector("#provider-form")?.addEventListener("submit", saveProvider);
   }
@@ -1280,6 +1296,7 @@ document.addEventListener("click", async (event) => {
     if (action === "clear-keys") {
       clearSecrets();
       usagePanel.invalidate();
+      modelPicker.invalidate();
       showSettings("data");
       toast("本次会话中的密钥已清除");
     }
@@ -1327,6 +1344,7 @@ document.addEventListener("click", async (event) => {
         const secrets = getSecrets();
         if (secrets.models) delete secrets.models[provider.id];
         setSecrets(secrets);
+        modelPicker.invalidate(provider.id);
         persist();
       });
   }

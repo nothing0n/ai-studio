@@ -85,7 +85,10 @@ export function providerFormValue(form) {
   };
 }
 
-export function bindModelForm(dialog, { providerId = crypto.randomUUID(), onUsage } = {}) {
+export function bindModelForm(
+  dialog,
+  { providerId = crypto.randomUUID(), onUsage, onModels } = {},
+) {
   const form = dialog.querySelector("#provider-form"),
     status = dialog.querySelector("#model-discovery-status");
   form.dataset.providerId = providerId;
@@ -182,7 +185,10 @@ export function bindModelForm(dialog, { providerId = crypto.randomUUID(), onUsag
       provider = { id: providerId, ...providerFormValue(form) };
       if (!provider.model) throw new Error("请先选择或填写模型名称");
       apiKey = form.elements.apiKey.value.trim();
-      if (!apiKey && !/^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::|\/)/.test(provider.baseUrl))
+      if (
+        !apiKey &&
+        !/^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::|\/|$)/.test(provider.baseUrl)
+      )
         throw new Error("请先填写 API Key");
       provider.options = { ...provider.options, maxTokens: 1024 };
     } catch (error) {
@@ -241,7 +247,7 @@ export function bindModelForm(dialog, { providerId = crypto.randomUUID(), onUsag
       return;
     }
     const key = form.elements.apiKey.value.trim();
-    if (!key && !/^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::|\/)/.test(baseUrl)) {
+    if (!key && !/^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::|\/|$)/.test(baseUrl)) {
       status.textContent = "请先填写 API Key，再读取账号可用模型";
       return;
     }
@@ -260,6 +266,7 @@ export function bindModelForm(dialog, { providerId = crypto.randomUUID(), onUsag
       )
         return;
       const current = form.elements.model.value;
+      onModels?.({ id: providerId, baseUrl }, key, models);
       form.elements.model.innerHTML = modelChoices(
         models,
         models.includes(current) ? current : models[0],

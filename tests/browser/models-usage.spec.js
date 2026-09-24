@@ -88,6 +88,9 @@ test("platforms, models and parameters use dropdowns while usage remains visible
   });
   await page.getByRole("button", { name: "保存连接", exact: true }).click();
   await close(page);
+  await expect(
+    page.getByLabel("当前模型", { exact: true }).locator('option[value="gpt-6-astra"]'),
+  ).toHaveCount(1);
   await send(page, "你好");
   await expect(page.locator(".assistant-message")).toContainText("这是模型回答");
   await expect(panel.locator("[data-usage-total]")).toHaveText("800 Token");
@@ -203,4 +206,69 @@ test("usage records from another tab update the persistent line without opening 
   await expect(page.locator("[data-usage-total]")).toHaveText("30 Token");
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await other.close();
+});
+
+test("composer switches models within the same connection without settings or lost chat, and locks during generation", async ({
+  page,
+}, info) => {
+  const requests = [];
+  let release;
+  await page.route("https://api.openai.com/**", async (route) => {
+    expect(route.request().headers().authorization).toBe("Bearer fake-picker-key");
+    if (route.request().url().endsWith("/models"))
+      return route.fulfill({
+        json: {
+          data: [{ id: "gpt-5.4" }, { id: "gpt-4.1-api-only" }, { id: "text-embedding-3-small" }],
+        },
+      });
+    expect(route.request().url()).toBe("https://api.openai.com/v1/chat/completions");
+    const body = route.request().postDataJSON();
+    requests.push(body);
+    if (requests.length === 2)
+      await new Promise((resolve) => {
+        release = resolve;
+      });
+    await route.fulfill({
+      json: {
+        choices: [{ message: { content: `回答来自 ${body.model}` }, finish_reason: "stop" }],
+      },
+    });
+  });
+  await page.goto("/");
+  await settings(page);
+  await page.getByLabel("API Key", { exact: true }).fill("fake-picker-key");
+  await page.getByRole("button", { name: "保存连接", exact: true }).click();
+  await close(page);
+  const picker = page.getByLabel("当前模型", { exact: true });
+  await expect(picker).toBeVisible();
+  await expect(picker).toHaveValue("gpt-5.4");
+  await send(page, "第一轮");
+  await expect(page.locator(".assistant-message")).toContainText("回答来自 gpt-5.4");
+  await page.getByRole("textbox", { name: "输入消息" }).fill("保留这份草稿");
+  await picker.focus();
+  await expect(picker.locator('option[value="gpt-4.1-api-only"]')).toHaveCount(1);
+  await expect(picker.locator('option[value="text-embedding-3-small"]')).toHaveCount(0);
+  await expect(picker.locator('option[value="deepseek-flash"]')).toHaveCount(0);
+  await picker.selectOption("gpt-4.1-api-only");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "输入消息" })).toHaveValue("保留这份草稿");
+  await page.getByRole("button", { name: "发送消息", exact: true }).click();
+  await expect(picker).toBeDisabled();
+  await expect.poll(() => requests.length).toBe(2);
+  release();
+  await expect(picker).toBeEnabled();
+  expect(requests.map((body) => body.model)).toEqual(["gpt-5.4", "gpt-4.1-api-only"]);
+  expect(requests[1].messages.some((message) => message.content === "第一轮")).toBe(true);
+  await expect(page.locator(".assistant-message")).toHaveCount(2);
+  await page.reload();
+  await expect(picker).toHaveValue("gpt-4.1-api-only");
+  await expect(page.locator(".assistant-message")).toHaveCount(2);
+  if (info.project.name === "mobile") await page.setViewportSize({ width: 320, height: 640 });
+  await expect(picker).toBeVisible();
+  const box = await picker.boundingBox(),
+    sendBox = await page.getByRole("button", { name: "发送消息", exact: true }).boundingBox();
+  expect(box.width).toBeGreaterThan(45);
+  expect(box.x + box.width).toBeLessThanOrEqual(sendBox.x);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: `.local/${info.project.name}-composer-model.png`, fullPage: true });
 });
