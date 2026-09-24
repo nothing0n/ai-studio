@@ -1,0 +1,23 @@
+{
+  "name": "personal-ai-studio",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "node --test tests/*.test.js",
+    "test:ui": "playwright test"
+  },
+  "dependencies": {
+    "dompurify": "3.4.16",
+    "lucide": "1.48.0",
+    "marked": "18.0.14",
+    "vite": "8.3.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "prettier": "3.9.9"
+  }
+}
