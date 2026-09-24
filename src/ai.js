@@ -19,18 +19,52 @@ async function modelJSON(response) {
   }
 }
 
-export function safeErrorMessage(status) {
+const limitErrors = new Map([
+  ["credit_balance_exhausted", "API 预付余额已耗尽，请在平台账单页补充额度"],
+  ["organization_spend_limit_exceeded", "API 组织已达到支出上限，请检查组织的账单限额"],
+  ["project_spend_limit_exceeded", "API 项目已达到支出上限，请检查当前项目的限额"],
+  [
+    "organization_usage_limit_exceeded",
+    "API 组织已达到平台分配的用量上限，请查看平台的 Limits 设置",
+  ],
+  [
+    "insufficient_quota",
+    "API 可用额度不足或已达到用量上限，请检查 API 账单与限额；连续重试无法解决",
+  ],
+  ["rate_limit_exceeded", "请求或 Token 速率达到上限，请稍后重试"],
+  ["rate_limit_error", "请求或 Token 速率达到上限，请稍后重试"],
+  ["slow_down", "请求增长过快，已触发临时限流，请降低请求频率后重试"],
+]);
+
+export function safeErrorMessage(status, reason = "") {
+  if (status === 429 && limitErrors.has(reason)) return limitErrors.get(reason);
   const messages = {
     400: "模型拒绝了请求，请检查模型名称或缩短对话",
     401: "模型密钥无效或已过期，请重新填写",
     403: "该密钥没有访问此模型的权限，或服务不允许浏览器调用",
     404: "找不到模型接口，请检查 Base URL 和模型名称",
     413: "对话内容过长，请新建会话或使用更长上下文的模型",
-    429: "请求过于频繁或模型余额不足，请稍后重试并检查额度",
+    429: "API 返回 429，未说明具体原因；请检查平台的账户额度与速率限制",
   };
   return (
     messages[status] ||
     (status >= 500 ? "模型服务暂时不可用，请稍后重试" : `模型请求失败（HTTP ${status}）`)
+  );
+}
+
+async function responseError(response) {
+  let reason = "";
+  if (response.status === 429) {
+    // Only display recognized codes. Provider messages and parse errors can contain credentials.
+    const body = await response.json().catch(() => null);
+    reason =
+      [body?.error?.code, body?.error?.type].find(
+        (value) => typeof value === "string" && limitErrors.has(value),
+      ) || "";
+  }
+  return new ModelError(
+    safeErrorMessage(response.status, reason),
+    reason || String(response.status),
   );
 }
 
@@ -162,8 +196,7 @@ async function runChat({
       "无法连接模型。请检查网络、接口地址，以及服务是否允许网页直接调用（CORS）",
     );
   }
-  if (!response.ok)
-    throw new ModelError(safeErrorMessage(response.status), String(response.status));
+  if (!response.ok) throw await responseError(response);
   const type = response.headers.get("content-type") || "";
   if (type.includes("application/json")) {
     const result = await modelJSON(response);
@@ -256,7 +289,7 @@ export async function fetchModels({ baseUrl, apiKey, signal, fetchImpl = fetch }
     credentials: "omit",
     referrerPolicy: "no-referrer",
   });
-  if (!response.ok) throw new ModelError(safeErrorMessage(response.status));
+  if (!response.ok) throw await responseError(response);
   const json = await modelJSON(response);
   if (!Array.isArray(json.data))
     throw new ModelError("该接口未返回模型列表，请选择常用模型或使用自定义模型");

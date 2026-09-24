@@ -86,6 +86,45 @@ test("HTTP errors do not expose upstream secrets", async () => {
     (error) => error.message.includes("密钥") && !error.message.includes("SECRET"),
   );
 });
+test("429 errors distinguish billing limits from rate limits without exposing provider messages", async () => {
+  const cases = [
+    [{ code: "credit_balance_exhausted", type: "insufficient_quota" }, /预付余额已耗尽/],
+    [{ code: "project_spend_limit_exceeded", type: "insufficient_quota" }, /项目已达到支出上限/],
+    [{ code: "organization_spend_limit_exceeded" }, /组织已达到支出上限/],
+    [{ code: "organization_usage_limit_exceeded" }, /平台分配的用量上限/],
+    [{ code: "insufficient_quota", type: "rate_limit_error" }, /连续重试无法解决/],
+    [{ code: "rate_limit_exceeded", type: "insufficient_quota" }, /速率达到上限/],
+    [{ code: "slow_down" }, /临时限流/],
+    [{ code: "unknown", type: "insufficient_quota" }, /API 可用额度不足/],
+    [{ type: "rate_limit_error" }, /速率达到上限/],
+    [{ code: "toString", type: "unknown" }, /未说明具体原因/],
+    [{}, /未说明具体原因/],
+  ];
+  for (const [error, expected] of cases) {
+    const fetchImpl = async () =>
+      Response.json({ error: { ...error, message: "CANARY_FAKE_KEY" } }, { status: 429 });
+    for (const call of [
+      () => completeChat({ provider, messages: [], fetchImpl }),
+      () => fetchModels({ baseUrl: provider.baseUrl, fetchImpl }),
+    ])
+      await assert.rejects(
+        call(),
+        (result) => expected.test(result.message) && !result.message.includes("CANARY"),
+      );
+  }
+  await assert.rejects(
+    completeChat({
+      provider,
+      messages: [],
+      fetchImpl: async () =>
+        new Response("CANARY_FAKE_KEY", {
+          status: 429,
+          headers: { "Content-Type": "application/json" },
+        }),
+    }),
+    (error) => error.message.includes("未说明具体原因") && !error.message.includes("CANARY"),
+  );
+});
 test("invalid JSON cannot expose response excerpts in chat or model-discovery errors", async () => {
   const fetchImpl = async () =>
     new Response("CANARY_FAKE_KEY_123", {
