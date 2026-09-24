@@ -90,7 +90,7 @@ button svg {
   color: #fff;
   font-size: 23px;
   font-weight: 600;
-  letter-spacing: 2px;
+  letter-spacing: 0;
   padding: 0 7px;
 }
 .brand-mark {
@@ -271,7 +271,13 @@ button svg {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  background: linear-gradient(150deg, #fbfbfd 0%, #f7f8fc 60%, #fbfbfd 100%);
+  background: #fafbfc;
+}
+.main.is-empty .chat-area {
+  flex: 0;
+}
+.main.is-empty .composer-wrap {
+  margin-block: auto;
 }
 .topbar {
   min-height: 78px;

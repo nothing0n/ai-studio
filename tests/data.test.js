@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   initialState,
   cleanState,
@@ -11,6 +12,73 @@ import {
   clone,
 } from "../src/data.js";
 const time = "2026-09-24T10:00:00.000Z";
+const legacyState = () =>
+  JSON.parse(readFileSync(new URL("./fixtures/legacy-state.json", import.meta.url), "utf8"));
+function configuredState() {
+  const state = initialState(),
+    template = state.bots[0];
+  state.bots.push(
+    { ...template, id: "level", name: "关卡策划", keywords: "关卡,探索", prompt: "你负责关卡设计" },
+    {
+      ...template,
+      id: "system",
+      name: "系统策划",
+      keywords: "系统,奖励",
+      prompt: "你负责系统设计",
+    },
+  );
+  return state;
+}
+
+test("new workspace contains only the personal butler", () => {
+  assert.deepEqual(
+    initialState().bots.map((bot) => bot.id),
+    ["butler"],
+  );
+  assert.ok(!initialState().bots[0].prompt.includes("策划"));
+});
+
+test("legacy cleanup preserves customized roles, models and conversation history", () => {
+  const old = legacyState();
+  old.bots.find((bot) => bot.id === "level").updatedAt = "2099-01-01T00:00:00.000Z";
+  old.bots.find((bot) => bot.id === "system").prompt = "用户自己写的指令";
+  old.bots.find((bot) => bot.id === "balance").providerId = "model";
+  old.bots.push({ ...old.bots[1], id: "my-custom-bot" });
+  old.providers = [
+    {
+      id: "model",
+      name: "模型",
+      baseUrl: "https://example.com/v1",
+      model: "test",
+      updatedAt: time,
+      deletedAt: null,
+    },
+  ];
+  old.conversations = sample().conversations;
+  const cleaned = cleanState(old);
+  assert.deepEqual(
+    cleaned.bots.map((bot) => bot.id),
+    ["butler", "system", "balance", "my-custom-bot"],
+  );
+  assert.deepEqual(cleaned.providers, old.providers);
+  assert.deepEqual(cleaned.conversations, old.conversations);
+  assert.equal(cleaned.bots[0].prompt, initialState().bots[0].prompt);
+  assert.deepEqual(cleanState(cleaned), cleaned);
+});
+
+test("old defaults cannot return through sync or overwrite customized remote roles", () => {
+  const old = legacyState(),
+    remote = legacyState();
+  old.bots[1].updatedAt = "2099-01-01T00:00:00.000Z";
+  remote.bots[1].prompt = "保留我的自定义指令";
+  const merged = mergeStates(old, remote, legacyState());
+  assert.equal(merged.bots.find((bot) => bot.id === "level").prompt, "保留我的自定义指令");
+  assert.equal(merged.bots.length, 2);
+  assert.deepEqual(mergeStates(merged, old), merged);
+  const deleted = legacyState();
+  deleted.bots[2].deletedAt = time;
+  assert.equal(cleanState(deleted).bots.find((bot) => bot.id === "system").deletedAt, time);
+});
 const message = (id, content, role = "user") => ({
   id,
   content,
@@ -24,7 +92,7 @@ const message = (id, content, role = "user") => ({
   error: "",
 });
 function sample() {
-  const state = initialState();
+  const state = configuredState();
   const chat = createConversation("level");
   chat.id = "chat-1";
   chat.messages = [message("first", "开始")];
@@ -54,7 +122,7 @@ test("deletion does not resurrect, while offline new messages get a recovery con
   assert.deepEqual(mergeStates(merged, b), merged);
 });
 test("one-sided bot edit survives a slow device clock", () => {
-  const base = initialState();
+  const base = configuredState();
   base.bots[1].updatedAt = time;
   const a = clone(base),
     b = clone(base);
@@ -63,7 +131,7 @@ test("one-sided bot edit survives a slow device clock", () => {
   assert.equal(mergeStates(a, b, base).bots.find((bot) => bot.id === "level").name, "新名字");
 });
 test("concurrent role edits retain a conflict copy", () => {
-  const base = initialState(),
+  const base = configuredState(),
     a = clone(base),
     b = clone(base);
   a.bots[1].prompt = "电脑指令";
@@ -107,7 +175,7 @@ test("invalid backup versions fail without changing original", () => {
   assert.deepEqual(state, original);
 });
 test("explicit positive routing beats negated role mention and followups keep role", () => {
-  const bots = initialState().bots;
+  const bots = configuredState().bots;
   assert.equal(routeByKeywords("不要找关卡策划，请交给系统策划", bots, "level"), "system");
   assert.equal(routeByKeywords("继续展开", bots, "level"), "level");
   assert.equal(routeByKeywords("再设计一下奖励系统", bots, "level"), "system");

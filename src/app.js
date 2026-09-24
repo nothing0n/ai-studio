@@ -126,7 +126,7 @@ let syncTimer,
 let deferredState = null;
 let lastSavedState = clone(state);
 const app = document.querySelector("#app");
-const roleOrder = ["butler", "level", "system", "balance"];
+const roleOrder = ["butler"];
 const bots = () =>
   state.bots
     .filter((bot) => !bot.deletedAt)
@@ -276,23 +276,23 @@ function render() {
   };
   app.innerHTML = `<button class="sidebar-overlay ${ui.sidebar ? "visible" : ""}" data-action="close-sidebar" aria-label="关闭侧栏"></button>
   <aside class="sidebar ${ui.sidebar ? "open" : ""}" aria-label="角色和历史对话">
-    <a class="brand" href="#" data-action="new"><span class="brand-mark">✦</span><span>策划室<small>YOUR PERSONAL AI STUDIO</small></span></a>
-    <button class="new-chat" data-action="new">${icon("plus")}<span>开启新对话</span><kbd>Ctrl K</kbd></button>
+    <a class="brand" href="#" data-action="new"><span class="brand-mark">✦</span><span>AI Bot</span></a>
+    <button class="new-chat" data-action="new">${icon("plus")}<span>新对话</span></button>
     <div class="nav-label">我的团队<button class="icon-button" data-action="add-bot" aria-label="添加角色">${icon("plus")}</button></div>
     <nav class="team-nav">${bots()
       .map(
         (item) =>
-          `<div class="bot-nav-wrap"><button class="bot-nav ${bot.id === item.id ? "active" : ""}" data-bot="${item.id}" ${bot.id === item.id ? 'aria-current="true"' : ""}>${avatar(item)}<span>${esc(item.name)}<small>${esc(item.description)}</small></span></button><button class="edit-bot icon-button" data-edit-bot="${item.id}" aria-label="编辑${esc(item.name)}">${icon("pencil")}</button></div>`,
+          `<div class="bot-nav-wrap"><button class="bot-nav ${bot.id === item.id ? "active" : ""}" data-bot="${item.id}" ${bot.id === item.id ? 'aria-current="true"' : ""}>${avatar(item)}<span>${esc(item.name)}</span></button><button class="edit-bot icon-button" data-edit-bot="${item.id}" aria-label="编辑${esc(item.name)}">${icon("pencil")}</button></div>`,
       )
       .join("")}</nav>
     <div class="nav-label history-label">最近对话 <span>${allChats.length || ""}</span></div>
-    <div class="history-list">${allChats.length ? allChats.map((chat) => `<div class="history-item ${ui.activeId === chat.id ? "active" : ""}"><button data-chat="${chat.id}" title="${esc(chat.title)}">${icon("message-square")}<span>${esc(chat.title)}</span></button><button class="delete-chat icon-button" data-delete-chat="${chat.id}" aria-label="删除会话：${esc(chat.title)}">${icon("trash-2")}</button></div>`).join("") : '<div class="empty-history">好想法，从第一句开始。</div>'}</div>
-    <div class="sidebar-bottom"><button class="bottom-button" data-action="settings">${icon("settings-2")}<span>设置与连接</span></button><div class="profile"><span class="profile-avatar">我</span><span>私人工作室<small>仅你自己使用</small></span><span class="version">V1</span></div></div>
+    <div class="history-list">${allChats.length ? allChats.map((chat) => `<div class="history-item ${ui.activeId === chat.id ? "active" : ""}"><button data-chat="${chat.id}" title="${esc(chat.title)}">${icon("message-square")}<span>${esc(chat.title)}</span></button><button class="delete-chat icon-button" data-delete-chat="${chat.id}" aria-label="删除会话：${esc(chat.title)}">${icon("trash-2")}</button></div>`).join("") : ""}</div>
+    <div class="sidebar-bottom"><button class="bottom-button" data-action="settings">${icon("settings-2")}<span>设置与连接</span></button></div>
   </aside>
-  <main class="main"><header class="topbar"><button class="mobile-menu icon-button" data-action="open-sidebar" aria-label="打开角色和历史对话">${icon("menu")}</button><div class="breadcrumb"><span class="workspace-label">工作台</span><span>/</span><strong>${esc(bot.name)}</strong>${conversation ? `<button class="icon-button title-edit" data-action="rename" aria-label="重命名会话">${icon("pencil")}</button>` : ""}</div><div class="topbar-actions"><span class="save-badge ${ui.syncStatus === "error" ? "error" : ""}" title="${esc(ui.syncError)}">${ui.syncStatus === "synced" ? icon("check") : ""}${syncLabels[ui.syncBusy ? "syncing" : ui.syncStatus]}</span><button class="text-button sync-button" data-action="${device.repository ? "sync" : "github-settings"}" ${ui.syncBusy ? "disabled" : ""}>${icon(device.repository ? "refresh-cw" : "cloud", ui.syncBusy ? "spin" : "")}<span>${device.repository ? "同步" : "连接 GitHub"}</span></button></div></header>
+  <main class="main ${conversation?.messages.length ? "" : "is-empty"}"><header class="topbar"><button class="mobile-menu icon-button" data-action="open-sidebar" aria-label="打开角色和历史对话">${icon("menu")}</button><div class="breadcrumb"><strong>${esc(bot.name)}</strong>${conversation ? `<button class="icon-button title-edit" data-action="rename" aria-label="重命名会话">${icon("pencil")}</button>` : ""}</div><div class="topbar-actions"><span class="save-badge ${ui.syncStatus === "error" ? "error" : ""}" title="${esc(ui.syncError)}">${ui.syncStatus === "synced" ? icon("check") : ""}${syncLabels[ui.syncBusy ? "syncing" : ui.syncStatus]}</span><button class="text-button sync-button" data-action="${device.repository ? "sync" : "github-settings"}" ${ui.syncBusy ? "disabled" : ""}>${icon(device.repository ? "refresh-cw" : "cloud", ui.syncBusy ? "spin" : "")}<span>${device.repository ? "同步" : "连接 GitHub"}</span></button></div></header>
   ${bootError ? `<div class="notice error-notice">${esc(bootError)} <button data-action="raw-backup">导出原始备份</button></div>` : ""}
-  <section class="chat-area" aria-label="聊天内容">${conversation?.messages.length ? `<div class="messages">${conversation.messages.map(renderMessage).join("")}</div>` : renderWelcome(bot)}</section>
-  <div class="composer-wrap">${ui.routing ? `<div class="activity-line">${icon("sparkles")}管家正在邀请合适的伙伴…</div>` : ""}<form class="composer" id="composer"><textarea id="message-input" aria-label="输入消息" placeholder="${bot.id === "butler" ? "说说你的想法，让团队一起想办法…" : `和${esc(bot.name)}聊聊你的想法…`}" rows="2" maxlength="30000" ${ui.busy ? "disabled" : ""}>${esc(ui.draft)}</textarea><div class="composer-tools"><button class="route-chip" type="button" data-action="route-toggle" title="${mode() === "auto" ? "点击固定当前角色" : "点击交给管家自动分配"}">${icon(mode() === "auto" ? "sparkles" : bot.icon)}${mode() === "auto" ? "管家自动分配" : esc(bot.name)}${icon("chevron-down")}</button><div><button class="model-note" type="button" data-action="settings" title="配置模型">${provider ? esc(provider.name) : "先连接一个模型"}${icon("chevron-down")}</button><button class="send-button" type="${ui.busy ? "button" : "submit"}" ${ui.busy ? 'data-action="stop"' : ""} aria-label="${ui.busy ? "停止生成" : "发送消息"}">${icon(ui.busy ? "square" : "arrow-up")}</button></div></div></form><div class="composer-hint">Enter 发送 · Shift + Enter 换行<span>${device.repository ? "聊天同步到你的私有仓库" : "记录保存在本机，可随时连接私有仓库"}</span></div></div></main>`;
+  <section class="chat-area" aria-label="聊天内容">${conversation?.messages.length ? `<div class="messages">${conversation.messages.map(renderMessage).join("")}</div>` : ""}</section>
+  <div class="composer-wrap">${ui.routing ? `<div class="activity-line">${icon("sparkles")}管家正在邀请合适的伙伴…</div>` : ""}<form class="composer" id="composer"><textarea id="message-input" aria-label="输入消息" placeholder="输入消息…" rows="2" maxlength="30000" ${ui.busy ? "disabled" : ""}>${esc(ui.draft)}</textarea><div class="composer-tools"><button class="route-chip" type="button" data-action="route-toggle" title="${mode() === "auto" ? "点击固定当前角色" : "点击交给管家自动分配"}">${icon(mode() === "auto" ? "sparkles" : bot.icon)}${mode() === "auto" ? "管家自动分配" : esc(bot.name)}${icon("chevron-down")}</button><div><button class="model-note" type="button" data-action="settings" title="配置模型">${provider ? esc(provider.name) : "选择模型"}${icon("chevron-down")}</button><button class="send-button" type="${ui.busy ? "button" : "submit"}" ${ui.busy ? 'data-action="stop"' : ""} aria-label="${ui.busy ? "停止生成" : "发送消息"}">${icon(ui.busy ? "square" : "arrow-up")}</button></div></div></form></div></main>`;
   icons();
   const input = document.querySelector("#message-input");
   input.addEventListener("input", () => {
@@ -310,10 +310,6 @@ function render() {
     event.preventDefault();
     sendMessage();
   });
-}
-function renderWelcome(bot) {
-  const butler = bot.id === "butler";
-  return `<div class="welcome"><div class="welcome-emblem ${esc(bot.color)}">${icon(bot.icon)}</div><div class="eyebrow">${butler ? "你的团队，随时就位" : `${esc(bot.name)} · 随时一起想办法`}</div><h1>${butler ? "一个想法，<br />从这里开始。" : `和${esc(bot.name)}<br />一起把想法落地。`}</h1><p>${butler ? "和管家聊聊，它会邀请合适的角色接手。<br />也可以从左侧选择一位伙伴，直接开始。" : esc(bot.description)}</p><div class="suggestions"><button data-suggestion="帮我设计一个废弃工厂探索关卡，先一起确定核心体验。"><span class="suggestion-icon teal">${icon("map")}</span><strong>打磨一个关卡</strong><span>从探索动线到体验节奏</span><b>${icon("arrow-up-right")}</b></button><button data-suggestion="我想设计一套有持续成长感的玩法系统，帮我梳理核心循环。"><span class="suggestion-icon blue">${icon("layers")}</span><strong>构思一套系统</strong><span>把灵感变成完整的规则</span><b>${icon("arrow-up-right")}</b></button><button data-suggestion="帮我推敲角色成长的数值曲线，先明确变量和设计目标。"><span class="suggestion-icon amber">${icon("chart-no-axes-combined")}</span><strong>推敲数值与平衡</strong><span>让成长曲线更有说服力</span><b>${icon("arrow-up-right")}</b></button></div></div>`;
 }
 function renderMessage(message) {
   const bot = getBot(message.botId),
@@ -443,7 +439,8 @@ async function sendMessage(retryMessageId) {
       let targetId = routeByKeywords(content, bots(), bot.id);
       if (
         (conversation.messages.filter((m) => m.role === "user").length === 1 || ui.forceRoute) &&
-        (targetId === "butler" || ui.forceRoute)
+        (targetId === "butler" || ui.forceRoute) &&
+        bots().length > 1
       ) {
         ui.routing = true;
         render();
@@ -836,7 +833,7 @@ function editBot(botId) {
         providerId: "",
       };
   const dialog = openDialog(
-    `${heading(botId ? "编辑角色" : "邀请一位新伙伴", "角色指令决定它如何思考；模型决定它使用哪种能力。")}<form id="bot-form"><div class="field-row">${field("角色名称", '<input name="name" required maxlength="50" placeholder="例如：叙事策划" value="' + esc(bot.name) + '">')}${field("一句话职责", '<input name="description" maxlength="160" placeholder="它最擅长什么" value="' + esc(bot.description) + '">')}</div>${field("角色指令", '<textarea name="prompt" required rows="7" maxlength="30000" placeholder="描述它的专长、工作原则、输出格式和需要遵守的约束。">' + esc(bot.prompt) + "</textarea>")}${field("擅长的关键词", '<input name="keywords" maxlength="1000" placeholder="用逗号分隔，例如：剧情,对白,世界观" value="' + esc(bot.keywords) + '">', "帮助管家判断什么时候邀请这个角色。")}<div class="field-row">${field(
+    `${heading(botId ? "编辑角色" : "新建 Bot", "角色指令决定它如何思考；模型决定它使用哪种能力。")}<form id="bot-form"><div class="field-row">${field("角色名称", '<input name="name" required maxlength="50" placeholder="例如：写作助手" value="' + esc(bot.name) + '">')}${field("一句话职责", '<input name="description" maxlength="160" placeholder="它最擅长什么" value="' + esc(bot.description) + '">')}</div>${field("角色指令", '<textarea name="prompt" required rows="7" maxlength="30000" placeholder="描述它的专长、工作原则、输出格式和需要遵守的约束。">' + esc(bot.prompt) + "</textarea>")}${field("擅长的关键词", '<input name="keywords" maxlength="1000" placeholder="用逗号分隔，例如：写作,润色,翻译" value="' + esc(bot.keywords) + '">', "帮助管家判断什么时候邀请这个角色。")}<div class="field-row">${field(
       "使用的模型",
       '<select name="providerId"><option value="">跟随默认模型</option>' +
         providers()

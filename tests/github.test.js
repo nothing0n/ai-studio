@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { GitHubStore, utf8Base64, base64Utf8 } from "../src/github.js";
 import { initialState, createConversation, clone } from "../src/data.js";
 const configPath = "studio-data/settings.json";
@@ -88,6 +89,32 @@ test("public data repositories are rejected before any writes", async () => {
   server.private = false;
   await assert.rejects(store(server).sync(initialState()), /私有仓库/);
   assert.equal(server.writes.length, 0);
+});
+
+test("legacy repository settings are migrated once and stale presets never return", async () => {
+  const server = remoteServer();
+  const old = JSON.parse(
+    readFileSync(new URL("./fixtures/legacy-state.json", import.meta.url), "utf8"),
+  );
+  const config = { schemaVersion: old.schemaVersion, bots: old.bots, providers: old.providers };
+  server.set(configPath, config);
+  const cache = { [configPath]: clone(server.files.get(configPath)) };
+  const first = await store(server, cache).sync(initialState());
+  assert.deepEqual(
+    first.state.bots.map((bot) => bot.id),
+    ["butler"],
+  );
+  assert.equal(server.files.get(configPath).data.bots.length, 1);
+  const writes = server.writes.length;
+  const second = await store(server, first.cache).sync(first.state);
+  assert.equal(server.writes.length, writes);
+  server.set(configPath, config);
+  const third = await store(server, second.cache).sync(second.state);
+  assert.deepEqual(
+    third.state.bots.map((bot) => bot.id),
+    ["butler"],
+  );
+  assert.equal(server.files.get(configPath).data.bots.length, 1);
 });
 test("two devices synchronize appended messages, and unchanged sync does not commit", async () => {
   const server = remoteServer(),

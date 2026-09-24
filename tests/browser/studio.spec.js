@@ -28,6 +28,18 @@ async function send(page, text) {
   await page.getByRole("textbox", { name: "输入消息", exact: true }).fill(text);
   await page.getByRole("button", { name: "发送消息", exact: true }).click();
 }
+async function addRole(page, name, keywords) {
+  const menu = page.getByRole("button", { name: "打开角色和历史对话", exact: true });
+  if (await menu.isVisible()) await menu.click();
+  await page.getByRole("button", { name: "添加角色", exact: true }).click();
+  await page.getByLabel("角色名称", { exact: true }).fill(name);
+  await page.getByLabel("角色指令", { exact: true }).fill(`你是${name}，协助用户完成任务。`);
+  await page.getByLabel("擅长的关键词", { exact: true }).fill(keywords);
+  await page.getByRole("button", { name: "保存角色", exact: true }).click();
+  const close = page.getByRole("button", { name: "关闭侧栏", exact: true });
+  if (await close.isVisible())
+    await close.click({ position: { x: page.viewportSize().width - 12, y: 20 } });
+}
 const reply = (content) =>
   `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\ndata: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`;
 
@@ -89,10 +101,16 @@ test("responsive workspace, configuration, routing, continuation and secret-free
     });
   });
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: /一个想法/ })).toBeVisible();
+  await expect(page).toHaveTitle("AI Bot");
+  await expect(page.locator(".bot-nav")).toHaveCount(1);
+  await expect(page.locator(".bot-nav")).toContainText("管家");
+  await expect(page.locator(".chat-area")).toBeEmpty();
+  await expect(page.locator(".suggestions, .welcome, .profile, .composer-hint")).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: `.local/${info.project.name}-home.png`, fullPage: true });
   await addModel(page);
+  await addRole(page, "关卡策划", "关卡,探索");
+  await addRole(page, "系统策划", "系统,奖励");
   await send(page, "帮我设计一个探索关卡");
   await expect(page.locator(".assistant-message .message-content")).toContainText("可执行方案");
   await expect(page.getByRole("button", { name: "发送消息", exact: true })).toBeVisible();
