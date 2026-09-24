@@ -12,7 +12,7 @@ export const API_PLATFORMS = [
     name: "OpenAI / ChatGPT",
     keys: "https://platform.openai.com/api-keys",
     docs: "https://developers.openai.com/api/docs/models/gpt-5.4",
-    note: "已预填官方接口；模型名称可修改",
+    note: "选择模型后填写密钥即可；也可读取账号可用模型",
   },
   {
     name: "DeepSeek",
@@ -51,3 +51,111 @@ export const API_PLATFORMS = [
     note: "OpenAI 兼容接口",
   },
 ];
+
+const connections = [
+  {
+    id: "openai",
+    endpoints: [["官方", "https://api.openai.com/v1"]],
+    models: [
+      "gpt-5.4",
+      "gpt-5.4-mini",
+      "gpt-4.1",
+      "gpt-4.1-mini",
+      "gpt-6-astra",
+      "gpt-6-sol",
+      "gpt-6-luna",
+    ],
+    dashboard: "https://platform.openai.com/usage",
+    billing: "https://platform.openai.com/account/billing",
+  },
+  {
+    id: "deepseek",
+    endpoints: [["官方", "https://api.deepseek.com"]],
+    aliases: ["https://api.deepseek.com/v1"],
+    models: ["deepseek-flash", "deepseek-v4-pro"],
+    dashboard: "https://platform.deepseek.com/",
+    balance: "deepseek",
+  },
+  {
+    id: "gemini",
+    endpoints: [["官方兼容接口", "https://generativelanguage.googleapis.com/v1beta/openai"]],
+    models: ["gemini-3.8-flash"],
+    dashboard: "https://aistudio.google.com/",
+  },
+  {
+    id: "claude",
+    endpoints: [["官方兼容接口", "https://api.anthropic.com/v1"]],
+    models: ["claude-sonnet-4-6"],
+    dashboard: "https://platform.claude.com/",
+    discovery: false,
+  },
+  {
+    id: "xai",
+    endpoints: [["官方", "https://api.x.ai/v1"]],
+    models: ["grok-4.7"],
+    dashboard: "https://console.x.ai/",
+  },
+  {
+    id: "qwen",
+    endpoints: [
+      ["中国内地 · 北京", "https://dashscope.aliyuncs.com/compatible-mode/v1"],
+      ["国际 · 新加坡", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"],
+    ],
+    models: ["qwen-plus", "qwen-turbo", "qwen-max"],
+    dashboard: "https://bailian.console.aliyun.com/",
+  },
+  {
+    id: "kimi",
+    endpoints: [
+      ["中国", "https://api.moonshot.cn/v1"],
+      ["国际", "https://api.moonshot.ai/v1"],
+    ],
+    models: ["kimi-k2.6"],
+    dashboard: "https://platform.kimi.com/console",
+    balance: "kimi",
+  },
+];
+export const PLATFORM_PRESETS = API_PLATFORMS.map((platform, index) => ({
+  ...platform,
+  ...connections[index],
+}));
+export const CUSTOM_PLATFORM = {
+  id: "custom",
+  name: "自定义 OpenAI 兼容接口",
+  endpoints: [],
+  models: [],
+  note: "填写自定义地址后，可从接口读取模型列表",
+};
+export function platformFor(baseUrl = "") {
+  const normalized = String(baseUrl).replace(/\/+$/, "");
+  return (
+    PLATFORM_PRESETS.find((platform) =>
+      [...platform.endpoints.map((entry) => entry[1]), ...(platform.aliases || [])].includes(
+        normalized,
+      ),
+    ) || CUSTOM_PLATFORM
+  );
+}
+export function chatModelIds(ids, platformId) {
+  return [
+    ...new Set(
+      ids.filter(
+        (id) =>
+          typeof id === "string" &&
+          id.length > 0 &&
+          id.length <= 160 &&
+          !/[\u0000-\u001f]/.test(id),
+      ),
+    ),
+  ]
+    .filter(
+      (id) =>
+        platformId !== "openai" ||
+        (/^(?:gpt-[456]|o[134])/.test(id) &&
+          !/(?:embedding|tts|whisper|image|audio|realtime|transcri|codex|search|(?:^|-)pro(?:-|$))/.test(
+            id,
+          )),
+    )
+    .filter((id) => platformId !== "kimi" || !/^kimi-k3/.test(id))
+    .sort((a, b) => a.localeCompare(b));
+}

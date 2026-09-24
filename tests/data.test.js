@@ -5,6 +5,7 @@ import {
   initialState,
   cleanState,
   cleanMessage,
+  cleanProvider,
   createConversation,
   mergeStates,
   promptMessages,
@@ -60,7 +61,7 @@ test("legacy cleanup preserves customized roles, models and conversation history
     cleaned.bots.map((bot) => bot.id),
     ["butler", "system", "balance", "my-custom-bot"],
   );
-  assert.deepEqual(cleaned.providers, old.providers);
+  assert.deepEqual(cleaned.providers, old.providers.map(cleanProvider));
   assert.deepEqual(cleaned.conversations, old.conversations);
   assert.equal(cleaned.bots[0].prompt, initialState().bots[0].prompt);
   assert.deepEqual(cleanState(cleaned), cleaned);

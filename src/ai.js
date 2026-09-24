@@ -1,4 +1,7 @@
 import { endpointURL } from "./data.js";
+import { requestOptions } from "./model-options.js";
+import { normalizeUsage } from "./usage.js";
+import { platformFor, chatModelIds } from "./platforms.js";
 
 export class ModelError extends Error {
   constructor(message, code = "") {
@@ -70,7 +73,53 @@ export async function* sseEvents(body) {
   }
 }
 
-export async function completeChat({
+export async function completeChat(args) {
+  const startedAt = new Date().toISOString();
+  const provider = structuredClone(args.provider);
+  const record = {
+    id: crypto.randomUUID(),
+    providerId: provider.id,
+    providerName: provider.name,
+    baseUrl: provider.baseUrl,
+    model: provider.model,
+    purpose: args.purpose || "chat",
+    startedAt,
+    updatedAt: startedAt,
+    usage: null,
+    status: "pending",
+  };
+  const notify = () => {
+    try {
+      args.onUsage?.({ ...record, updatedAt: new Date().toISOString() });
+    } catch {
+      /* Accounting must never break a model reply. */
+    }
+  };
+  notify();
+  try {
+    const result = await runChat({
+      ...args,
+      provider,
+      stream: args.stream ?? provider.options?.streaming ?? true,
+      captureUsage(raw) {
+        const usage = normalizeUsage(raw);
+        if (usage) {
+          record.usage = usage;
+          notify();
+        }
+      },
+    });
+    record.status = "success";
+    return { ...result, usage: record.usage };
+  } catch (error) {
+    record.status = args.signal?.aborted || error.name === "AbortError" ? "aborted" : "error";
+    throw error;
+  } finally {
+    notify();
+  }
+}
+
+async function runChat({
   provider,
   apiKey,
   messages,
@@ -78,6 +127,7 @@ export async function completeChat({
   onDelta = () => {},
   stream = true,
   fetchImpl = fetch,
+  captureUsage,
 }) {
   const endpoint = `${endpointURL(provider.baseUrl)}/chat/completions`;
   const headers = { "Content-Type": "application/json" };
@@ -87,7 +137,12 @@ export async function completeChat({
     response = await fetchImpl(endpoint, {
       method: "POST",
       headers,
-      body: JSON.stringify({ model: provider.model, messages, stream }),
+      body: JSON.stringify({
+        model: provider.model,
+        messages,
+        stream,
+        ...requestOptions(provider, stream),
+      }),
       signal,
       redirect: "error",
       credentials: "omit",
@@ -104,6 +159,7 @@ export async function completeChat({
   const type = response.headers.get("content-type") || "";
   if (type.includes("application/json")) {
     const result = await response.json();
+    captureUsage(result.usage || result.choices?.[0]?.usage);
     if (result.error) throw new ModelError("模型返回错误，请检查模型权限或服务额度");
     const choice = result.choices?.[0];
     const content = choice?.message?.content || choice?.message?.refusal;
@@ -129,6 +185,7 @@ export async function completeChat({
     } catch {
       throw new ModelError("模型返回的数据不完整，已保留收到的内容");
     }
+    captureUsage(chunk.usage || chunk.choices?.[0]?.usage);
     if (chunk.error) throw new ModelError("模型在生成过程中返回错误，已保留收到的内容");
     const choice = chunk.choices?.[0];
     if (!choice) continue;
@@ -149,13 +206,15 @@ export async function completeChat({
   return { content, finishReason: finishReason || "stop" };
 }
 
-export async function selectBot({ text, bots, provider, apiKey, signal }) {
+export async function selectBot({ text, bots, provider, apiKey, signal, onUsage }) {
   const available = bots.filter((bot) => !bot.deletedAt);
   const result = await completeChat({
     provider,
     apiKey,
     signal,
     stream: false,
+    purpose: "router",
+    onUsage,
     messages: [
       {
         role: "system",
@@ -172,4 +231,25 @@ export async function selectBot({ text, bots, provider, apiKey, signal }) {
   } catch {
     return "butler";
   }
+}
+
+export async function fetchModels({ baseUrl, apiKey, signal, fetchImpl = fetch }) {
+  const endpoint = endpointURL(baseUrl);
+  const response = await fetchImpl(`${endpoint}/models`, {
+    headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+    signal,
+    redirect: "error",
+    credentials: "omit",
+    referrerPolicy: "no-referrer",
+  });
+  if (!response.ok) throw new ModelError(safeErrorMessage(response.status));
+  const json = await response.json();
+  if (!Array.isArray(json.data))
+    throw new ModelError("该接口未返回模型列表，请选择常用模型或使用自定义模型");
+  const models = chatModelIds(
+    json.data.slice(0, 5000).map((model) => model.id),
+    platformFor(endpoint).id,
+  );
+  if (!models.length) throw new ModelError("没有找到当前聊天接口可用的模型，请检查账号权限");
+  return models;
 }

@@ -12,9 +12,11 @@ async function closeDialog(page) {
 }
 async function addModel(page) {
   await openSettings(page);
-  await page.getByLabel("连接名称", { exact: true }).fill("我的测试模型");
-  await page.getByLabel("模型名称", { exact: true }).fill("test-model");
+  await page.getByLabel("模型平台", { exact: true }).selectOption("custom");
   await page.getByLabel("接口地址（Base URL）", { exact: true }).fill("https://model.example/v1");
+  await page.getByLabel("自定义模型名称", { exact: true }).fill("test-model");
+  await page.locator(".model-advanced summary").click();
+  await page.getByLabel("连接名称", { exact: true }).fill("我的测试模型");
   await page.getByLabel("API Key", { exact: true }).fill("fake-model-secret");
   await page.getByRole("button", { name: "保存连接", exact: true }).click();
   await expect(
@@ -104,13 +106,11 @@ test("member sessions retain their own starting profile and avatar across edits 
     ctx.fillRect(0, 0, 240, 160);
     return canvas.toDataURL("image/png").split(",")[1];
   });
-  await page
-    .locator("#avatar-file")
-    .setInputFiles({
-      name: "avatar.png",
-      mimeType: "image/png",
-      buffer: Buffer.from(png, "base64"),
-    });
+  await page.locator("#avatar-file").setInputFiles({
+    name: "avatar.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(png, "base64"),
+  });
   await expect(page.locator("#avatar-preview img")).toBeVisible();
   await page.screenshot({ path: `.local/${info.project.name}-member.png`, fullPage: true });
   await page.getByRole("button", { name: "保存角色", exact: true }).click();
@@ -203,6 +203,13 @@ test("experience generation stays a draft until saved and preserves edits made w
   await startMemberChat(page, "管家");
   const fresh = (await savedData(page)).conversations.find((chat) => !chat.messages.length);
   expect(fresh.profileSnapshot.experience).toBe("确认后的经验：先给结论");
+  const usagePurposes = await page.evaluate(() =>
+    Object.keys(localStorage)
+      .filter((key) => key.startsWith("ai-studio:usage:v1:"))
+      .map((key) => JSON.parse(localStorage.getItem(key)).purpose)
+      .sort(),
+  );
+  expect(usagePurposes).toEqual(["chat", "summary", "summary"]);
 });
 
 test("records recovered from another tab remain on disk after reload", async ({ page }) => {

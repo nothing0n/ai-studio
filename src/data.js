@@ -1,6 +1,7 @@
 import { migrateLegacyBots } from "./legacy.js";
+import { cleanModelOptions } from "./model-options.js";
 
-export const VERSION = 2;
+export const VERSION = 3;
 const EPOCH = "2026-01-01T00:00:00.000Z";
 export const uid = () => crypto.randomUUID();
 export const now = () => new Date().toISOString();
@@ -125,6 +126,7 @@ export function cleanProvider(record) {
     name: text(record.name, 80) || "模型连接",
     baseUrl: endpointURL(record.baseUrl),
     model: text(record.model, 160),
+    options: cleanModelOptions(record.options),
     updatedAt: date(record.updatedAt),
     deletedAt: record.deletedAt ? date(record.deletedAt) : null,
   };
@@ -187,7 +189,7 @@ export function cleanConversation(record) {
 export function cleanState(state) {
   if (
     !state ||
-    ![1, VERSION].includes(state.schemaVersion) ||
+    ![1, 2, VERSION].includes(state.schemaVersion) ||
     !Array.isArray(state.bots) ||
     !Array.isArray(state.providers) ||
     !Array.isArray(state.conversations)
@@ -340,7 +342,11 @@ export function mergeStates(local, remote, base) {
       migrateLegacyBots(remote.bots, initialState().bots[0]),
       migrateLegacyBots(base?.bots || [], initialState().bots[0]),
     ),
-    providers: mergeRecords(local.providers, remote.providers, base?.providers),
+    providers: mergeRecords(
+      local.providers,
+      remote.providers,
+      (base?.providers || []).map(cleanProvider),
+    ),
     conversations: [...chats.values()].sort((a, b) => a.id.localeCompare(b.id)),
   });
 }

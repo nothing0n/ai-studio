@@ -46,7 +46,6 @@ import {
   mergeStates,
   routeByKeywords,
   promptMessages,
-  endpointURL,
 } from "./data.js";
 import {
   loadState,
@@ -62,6 +61,9 @@ import { GitHubStore, parseRepository } from "./github.js";
 import { prepareAvatar } from "./avatar.js";
 import { summarizeExperience } from "./experience.js";
 import { OPENAI_DEFAULT, DEFAULT_REPOSITORY, API_PLATFORMS } from "./platforms.js";
+import { renderModelForm, bindModelForm, providerFormValue } from "./model-form.js";
+import { createUsagePanel } from "./usage-panel.js";
+import { saveUsage, isUsageKey } from "./usage.js";
 
 const ICONS = {
   Sparkles,
@@ -129,13 +131,8 @@ const ui = {
   syncError: "",
   forceRoute: false,
   editingProvider:
-    seededOpenAI ||
-    (state.providers.filter((provider) => !provider.deletedAt).length === 1 &&
-      state.providers.some(
-        (provider) => provider.id === OPENAI_DEFAULT.id && !provider.deletedAt,
-      ) &&
-      !getSecrets().models?.[OPENAI_DEFAULT.id]?.key)
-      ? OPENAI_DEFAULT.id
+    state.providers.filter((provider) => !provider.deletedAt).length === 1
+      ? state.providers.find((provider) => !provider.deletedAt).id
       : null,
   expandedBots: new Set(
     [
@@ -202,6 +199,16 @@ function keyFor(provider) {
   if (entry && entry.baseUrl !== provider.baseUrl)
     throw new Error("模型接口地址已变化，请为新地址重新填写密钥");
   return entry?.key || "";
+}
+const usagePanel = createUsagePanel({ provider: () => modelForBot(activeBot()), key: keyFor });
+function recordUsage(event) {
+  try {
+    saveUsage(event);
+  } catch {
+    usagePanel.markIncomplete();
+  }
+  usagePanel.update();
+  if (event.status !== "pending") usagePanel.refresh(true);
 }
 function icons() {
   createIcons({ icons: ICONS });
@@ -345,6 +352,7 @@ function render() {
   </aside>
   <main class="main ${conversation?.messages.length ? "" : "is-empty"}"><header class="topbar"><button class="mobile-menu icon-button" data-action="open-sidebar" aria-label="打开角色和历史对话">${icon("menu")}</button><div class="chat-contact">${avatar(bot)}<div><strong>${esc(bot.name)}</strong><div class="session-caption">${conversation ? esc(conversation.title) : "新会话"}${conversation ? `<button class="icon-button title-edit" data-action="rename" aria-label="重命名会话">${icon("pencil")}</button>` : ""}</div></div>${bot.archived ? "" : `<button class="icon-button contact-settings" data-edit-bot="${bot.id}" aria-label="成员资料">${icon("settings-2")}</button>`}</div><div class="topbar-actions">${conversation && !bot.archived ? `<button class="text-button memory-button" data-action="summarize" title="生成经验总结草稿">${icon("lightbulb")}<span>总结经验</span></button>` : ""}<span class="save-badge ${ui.syncStatus === "error" ? "error" : ""}" title="${esc(ui.syncError)}">${ui.syncStatus === "synced" ? icon("check") : ""}${syncLabels[ui.syncBusy ? "syncing" : ui.syncStatus]}</span><button class="text-button sync-button" data-action="${device.repository ? "sync" : "github-settings"}" ${ui.syncBusy ? "disabled" : ""}>${icon(device.repository ? "refresh-cw" : "cloud", ui.syncBusy ? "spin" : "")}<span>${device.repository ? "同步" : "连接 GitHub"}</span></button></div></header>
   ${bootError ? `<div class="notice error-notice">${esc(bootError)} <button data-action="raw-backup">导出原始备份</button></div>` : ""}
+  ${usagePanel.html()}
   <section class="chat-area" aria-label="聊天内容">${conversation?.messages.length ? `<div class="messages">${conversation.messages.map(renderMessage).join("")}</div>` : ""}</section>
   <div class="composer-wrap">${ui.routing ? `<div class="activity-line">${icon("sparkles")}管家正在邀请合适的伙伴…</div>` : ""}<form class="composer" id="composer"><textarea id="message-input" aria-label="输入消息" placeholder="输入消息…" rows="2" maxlength="30000" ${ui.busy ? "disabled" : ""}>${esc(ui.draft)}</textarea><div class="composer-tools"><button class="route-chip" type="button" ${bot.id === "butler" ? 'data-action="route-toggle"' : "disabled"} title="${mode() === "auto" ? "点击固定当前角色" : "点击交给管家自动分配"}">${icon(bot.id === "butler" && mode() === "auto" ? "sparkles" : bot.icon)}${bot.id === "butler" && mode() === "auto" ? "管家自动分配" : esc(bot.name)}${bot.id === "butler" ? icon("chevron-down") : ""}</button><div><button class="model-note" type="button" data-action="settings" title="配置模型">${provider ? esc(provider.name) : "选择模型"}${icon("chevron-down")}</button><button class="send-button" type="${ui.busy ? "button" : "submit"}" ${ui.busy ? 'data-action="stop"' : ""} aria-label="${ui.busy ? "停止生成" : "发送消息"}">${icon(ui.busy ? "square" : "arrow-up")}</button></div></div></form></div></main>`;
   icons();
@@ -364,6 +372,7 @@ function render() {
     event.preventDefault();
     sendMessage();
   });
+  usagePanel.refresh();
 }
 function renderMessage(message) {
   const bot = getBot(message.botId),
@@ -541,6 +550,7 @@ async function sendMessage(retryMessageId) {
             provider,
             apiKey: keyFor(provider),
             signal: ui.controller.signal,
+            onUsage: recordUsage,
           });
         } catch (error) {
           if (ui.controller.signal.aborted) throw error;
@@ -608,6 +618,7 @@ async function sendMessage(retryMessageId) {
       apiKey: keyFor(provider),
       messages,
       signal: ui.controller.signal,
+      onUsage: recordUsage,
       onDelta(delta) {
         responseMessage.content += delta;
         responseMessage.updatedAt = now();
@@ -807,8 +818,10 @@ function showSettings(tab = "models") {
       .join("")}</div><div class="settings-content">${content}</div>`,
     "settings-dialog",
   );
-  if (tab === "models")
+  if (tab === "models") {
+    bindModelForm(dialog);
     dialog.querySelector("#provider-form")?.addEventListener("submit", saveProvider);
+  }
   if (tab === "github")
     dialog.querySelector("#github-form").addEventListener("submit", connectGitHub);
   if (tab === "data") dialog.querySelector("#import-file").addEventListener("change", importBackup);
@@ -825,21 +838,18 @@ function modelsSettings() {
           )
           .join("")}</div>`
       : '<div class="setup-note">支持 OpenAI 兼容的 Chat Completions 接口。模型服务需要允许浏览器直接调用。</div>'
-  }<form id="provider-form"><h3>${editing ? "编辑模型连接" : "添加模型连接"}</h3><div class="field-row">${field("连接名称", '<input name="name" required maxlength="80" placeholder="例如：我的主力模型" value="' + esc(editing?.name) + '">')}${field("模型名称", '<input name="model" required maxlength="160" placeholder="供应商提供的模型 ID" value="' + esc(editing?.model) + '">')}</div>${field("接口地址（Base URL）", '<input name="baseUrl" required type="url" placeholder="https://api.example.com/v1" value="' + esc(editing?.baseUrl) + '">', "填 API 地址，不是聊天网页地址。也支持本机 localhost。")}${field("API Key", '<input name="apiKey" type="password" autocomplete="off" placeholder="仅保存在本次浏览器会话，不同步到仓库" value="' + esc(savedKey?.baseUrl === editing?.baseUrl ? savedKey?.key : "") + '">', "密钥可留空，用于不需要认证的本机服务。每台设备分别填写。")}<div class="form-actions">${editing ? '<button class="secondary-button" type="button" data-action="new-provider">取消编辑</button>' : ""}<button class="primary-button" type="submit">${icon("check")}保存连接</button></div></form>${platformLinks()}`;
+  }${renderModelForm(editing, savedKey)}${platformLinks()}`;
 }
 function platformLinks() {
   return `<details class="platform-directory"><summary>常见 AI · 密钥与 API 文档</summary><div>${API_PLATFORMS.map((platform) => `<article><strong>${esc(platform.name)}</strong><div><a href="${platform.keys}" target="_blank" rel="noopener noreferrer">密钥 / 控制台 ${icon("external-link")}</a><a href="${platform.docs}" target="_blank" rel="noopener noreferrer">API 文档 ${icon("external-link")}</a></div><small>${esc(platform.note)}</small></article>`).join("")}</div></details>`;
 }
 function saveProvider(event) {
   event.preventDefault();
-  const form = new FormData(event.currentTarget);
   try {
     const existing = providers().find((p) => p.id === ui.editingProvider);
     const provider = {
       id: existing?.id || uid(),
-      name: String(form.get("name")).trim(),
-      model: String(form.get("model")).trim(),
-      baseUrl: endpointURL(String(form.get("baseUrl")).trim()),
+      ...providerFormValue(event.currentTarget),
       updatedAt: now(),
       deletedAt: null,
     };
@@ -849,10 +859,11 @@ function saveProvider(event) {
     const secrets = getSecrets();
     secrets.models ||= {};
     secrets.models[provider.id] = {
-      key: String(form.get("apiKey")).trim(),
+      key: event.currentTarget.elements.apiKey.value.trim(),
       baseUrl: provider.baseUrl,
     };
     setSecrets(secrets);
+    usagePanel.invalidate(provider.id);
     if (
       !getBot("butler").providerId ||
       !providers().some((p) => p.id === getBot("butler").providerId)
@@ -861,7 +872,7 @@ function saveProvider(event) {
       getBot("butler").updatedAt = now();
     }
     persist();
-    ui.editingProvider = null;
+    ui.editingProvider = provider.id;
     render();
     showSettings("models");
     toast("模型连接已保存，可以开始聊天");
@@ -1078,6 +1089,7 @@ function editBot(botId, generate = false) {
         provider,
         apiKey: keyFor(provider),
         signal: request.signal,
+        onUsage: recordUsage,
       });
       if (!dialog.isConnected || request.signal.aborted) return;
       if (experience.value === originalText) {
@@ -1258,6 +1270,7 @@ document.addEventListener("click", async (event) => {
     }
     if (action === "clear-keys") {
       clearSecrets();
+      usagePanel.invalidate();
       showSettings("data");
       toast("本次会话中的密钥已清除");
     }
@@ -1357,9 +1370,11 @@ document.addEventListener("keydown", (event) => {
 });
 window.addEventListener("online", () => runSync(false));
 window.addEventListener("focus", () => {
+  usagePanel.refresh();
   if (!document.querySelector("dialog") && !ui.busy) runSync(false);
 });
 window.addEventListener("storage", (event) => {
+  if (isUsageKey(event.key)) usagePanel.update();
   if (event.key === "ai-studio:data:v1" && event.newValue) {
     try {
       const incoming = cleanState(JSON.parse(event.newValue));

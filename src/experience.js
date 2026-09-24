@@ -1,6 +1,13 @@
 import { completeChat } from "./ai.js";
 
-export async function summarizeExperience({ conversation, bot, provider, apiKey, signal }) {
+export async function summarizeExperience({
+  conversation,
+  bot,
+  provider,
+  apiKey,
+  signal,
+  onUsage,
+}) {
   const messages = conversation.messages
     .filter(
       (message) =>
@@ -25,6 +32,8 @@ export async function summarizeExperience({ conversation, bot, provider, apiKey,
     apiKey,
     signal,
     stream: false,
+    purpose: "summary",
+    onUsage,
     messages: [
       {
         role: "system",
