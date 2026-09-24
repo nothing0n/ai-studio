@@ -11,6 +11,14 @@ export class ModelError extends Error {
   }
 }
 
+async function modelJSON(response) {
+  try {
+    return await response.json();
+  } catch {
+    throw new ModelError("模型返回的数据格式不正确，请确认接口地址或稍后重试");
+  }
+}
+
 export function safeErrorMessage(status) {
   const messages = {
     400: "模型拒绝了请求，请检查模型名称或缩短对话",
@@ -158,7 +166,7 @@ async function runChat({
     throw new ModelError(safeErrorMessage(response.status), String(response.status));
   const type = response.headers.get("content-type") || "";
   if (type.includes("application/json")) {
-    const result = await response.json();
+    const result = await modelJSON(response);
     captureUsage(result.usage || result.choices?.[0]?.usage);
     if (result.error) throw new ModelError("模型返回错误，请检查模型权限或服务额度");
     const choice = result.choices?.[0];
@@ -166,12 +174,17 @@ async function runChat({
     if (typeof content !== "string")
       throw new ModelError("接口没有返回文本回答，请确认支持 Chat Completions");
     onDelta(content);
-    return { content, finishReason: choice.finish_reason || "stop" };
+    return {
+      content,
+      finishReason: choice.finish_reason || "stop",
+      refused: !!choice.message?.refusal,
+    };
   }
   if (!type.includes("text/event-stream"))
     throw new ModelError("接口返回格式不正确，请确认地址指向模型 API，而不是聊天网页");
   let content = "",
     finishReason = "",
+    refused = false,
     done = false;
   for await (const event of sseEvents(response.body)) {
     if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
@@ -190,6 +203,7 @@ async function runChat({
     const choice = chunk.choices?.[0];
     if (!choice) continue;
     const delta = choice.delta?.content || choice.delta?.refusal;
+    if (choice.delta?.refusal) refused = true;
     if (typeof delta === "string") {
       content += delta;
       onDelta(delta);
@@ -203,7 +217,7 @@ async function runChat({
         ? "此接口只返回了工具调用，请换用能直接回答文本的模型"
         : "模型没有返回文本，请检查模型配置",
     );
-  return { content, finishReason: finishReason || "stop" };
+  return { content, finishReason: finishReason || "stop", refused };
 }
 
 export async function selectBot({ text, bots, provider, apiKey, signal, onUsage }) {
@@ -243,7 +257,7 @@ export async function fetchModels({ baseUrl, apiKey, signal, fetchImpl = fetch }
     referrerPolicy: "no-referrer",
   });
   if (!response.ok) throw new ModelError(safeErrorMessage(response.status));
-  const json = await response.json();
+  const json = await modelJSON(response);
   if (!Array.isArray(json.data))
     throw new ModelError("该接口未返回模型列表，请选择常用模型或使用自定义模型");
   const models = chatModelIds(

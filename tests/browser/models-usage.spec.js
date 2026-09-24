@@ -54,8 +54,11 @@ test("platforms, models and parameters use dropdowns while usage remains visible
   await page.goto("/");
   const panel = page.getByRole("complementary", { name: "账户余额与本网页用量" });
   await expect(panel).toBeVisible();
-  await expect(panel).toContainText("普通密钥无法直接查询余额");
-  await expect(panel.locator("[data-balance-value]")).toHaveText("—");
+  await expect(panel.locator(".account-balance")).toHaveAttribute(
+    "title",
+    /普通密钥无法直接查询余额/,
+  );
+  await expect(panel.locator("[data-balance-value]")).toHaveText("↗");
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await settings(page);
   await expect(page.getByLabel("模型平台", { exact: true })).toHaveValue("openai");
@@ -88,8 +91,10 @@ test("platforms, models and parameters use dropdowns while usage remains visible
   await send(page, "你好");
   await expect(page.locator(".assistant-message")).toContainText("这是模型回答");
   await expect(panel.locator("[data-usage-total]")).toHaveText("800 Token");
-  await expect(panel).toContainText("输入 700 · 输出 100");
-  await expect(panel).toContainText("1 次请求");
+  await expect(panel.locator(".site-usage")).toHaveAttribute(
+    "title",
+    /输入 700 · 输出 100 · 1 次请求/,
+  );
   expect(requests[0]).toMatchObject({
     model: "gpt-5.4",
     reasoning_effort: "none",
@@ -98,6 +103,7 @@ test("platforms, models and parameters use dropdowns while usage remains visible
     stream_options: { include_usage: true },
   });
   const before = await panel.boundingBox();
+  expect(before.height).toBeLessThanOrEqual(30);
   await page.locator(".chat-area").evaluate((el) => {
     el.scrollTop = 0;
   });
@@ -155,24 +161,24 @@ test("official balances refresh after replies and switching platforms clears cre
   await close(page);
   const panel = page.locator("#usage-panel");
   await expect(panel.locator("[data-balance-value]")).toHaveText("¥12.34");
-  await expect(panel).toContainText("0 次请求");
+  await expect(panel.locator(".site-usage")).toHaveAttribute("title", /0 次请求/);
   await send(page, "你好");
   await expect(panel.locator("[data-balance-value]")).toHaveText("¥11.25");
   await expect(panel.locator("[data-usage-total]")).toHaveText("60 Token");
-  await expect(panel).toContainText("1 次请求");
+  await expect(panel.locator(".site-usage")).toHaveAttribute("title", /1 次请求/);
   await settings(page);
   await page.getByLabel("模型平台", { exact: true }).selectOption("openai");
   await expect(page.getByLabel("API Key", { exact: true })).toBeEmpty();
   await page.getByRole("button", { name: "保存连接", exact: true }).click();
   await close(page);
-  await expect(panel.locator("[data-balance-value]")).toHaveText("—");
+  await expect(panel.locator("[data-balance-value]")).toHaveText("↗");
   await expect(panel.locator("[data-usage-total]")).toHaveText("0 Token");
   expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toContain(
     "fake-deepseek-key",
   );
 });
 
-test("usage records from another tab update the persistent card without opening a panel", async ({
+test("usage records from another tab update the persistent line without opening a panel", async ({
   page,
   context,
 }) => {

@@ -6,7 +6,7 @@ import {
   modelCapabilities,
 } from "./model-options.js";
 import { endpointURL } from "./data.js";
-import { fetchModels } from "./ai.js";
+import { fetchModels, completeChat, ModelError } from "./ai.js";
 
 const esc = (value) =>
   String(value ?? "").replace(
@@ -58,6 +58,7 @@ export function renderModelForm(editing, savedKey) {
     <p id="model-discovery-status" class="field-hint" role="status">常用模型预设；填写密钥后可读取账号支持的模型。</p>
     <div id="custom-model-field" ${model ? "hidden" : ""}>${field("自定义模型名称", `<input name="customModel" maxlength="160" placeholder="仅当接口未提供模型列表时填写" ${model ? "" : "required"}>`)}</div>
     <details class="model-advanced"><summary>生成参数与连接名称</summary><div id="model-parameters">${parameterFields(provider)}</div>${field("连接名称", `<input name="name" maxlength="80" value="${esc(editing?.name || platform.name)}">`)}</details>
+    <div class="connection-test"><button class="secondary-button" type="button" id="test-model">测试连通性</button><span id="model-test-status" role="status">发送简短测试消息，会产生少量用量。</span></div>
     <div class="form-actions">${editing ? '<button class="secondary-button" type="button" data-action="new-provider">添加其他连接</button>' : ""}<button class="primary-button" type="submit">保存连接</button></div></form>`;
 }
 
@@ -84,9 +85,23 @@ export function providerFormValue(form) {
   };
 }
 
-export function bindModelForm(dialog) {
+export function bindModelForm(dialog, { providerId = crypto.randomUUID(), onUsage } = {}) {
   const form = dialog.querySelector("#provider-form"),
     status = dialog.querySelector("#model-discovery-status");
+  form.dataset.providerId = providerId;
+  const testButton = form.querySelector("#test-model"),
+    testStatus = form.querySelector("#model-test-status");
+  let testController = null;
+  const cancelTest = () => {
+    testController?.abort();
+    testController = null;
+    testButton.textContent = "测试连通性";
+  };
+  const invalidateTest = () => {
+    cancelTest();
+    testStatus.textContent = "配置已更改，可重新测试（会产生少量用量）。";
+    testStatus.dataset.state = "";
+  };
   let controller = null;
   const cancel = () => {
     controller?.abort();
@@ -113,6 +128,7 @@ export function bindModelForm(dialog) {
   };
   const endpointChanged = () => {
     cancel();
+    invalidateTest();
     form.elements.apiKey.value = "";
     const platform = selectedPlatform();
     form.elements.model.innerHTML = modelChoices(platform.models, platform.models[0]);
@@ -149,7 +165,73 @@ export function bindModelForm(dialog) {
   });
   dialog.addEventListener("dismiss", cancel);
   dialog.addEventListener("close", cancel);
+  dialog.addEventListener("dismiss", cancelTest);
+  dialog.addEventListener("close", cancelTest);
+  form.addEventListener("input", invalidateTest);
+  form.addEventListener("change", invalidateTest);
+  testButton.addEventListener("click", async () => {
+    if (testController) {
+      cancelTest();
+      testStatus.textContent = "测试已取消；已发生的用量仍会记录。";
+      testStatus.dataset.state = "";
+      return;
+    }
+    cancel();
+    let provider, apiKey;
+    try {
+      provider = { id: providerId, ...providerFormValue(form) };
+      if (!provider.model) throw new Error("请先选择或填写模型名称");
+      apiKey = form.elements.apiKey.value.trim();
+      if (!apiKey && !/^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::|\/)/.test(provider.baseUrl))
+        throw new Error("请先填写 API Key");
+      provider.options = { ...provider.options, maxTokens: 1024 };
+    } catch (error) {
+      testStatus.textContent = error.message;
+      testStatus.dataset.state = "error";
+      return;
+    }
+    const request = new AbortController();
+    testController = request;
+    testButton.textContent = "取消测试";
+    testStatus.textContent = "正在测试当前模型…";
+    testStatus.dataset.state = "loading";
+    const start = performance.now(),
+      timeout = setTimeout(() => request.abort(), 30000);
+    try {
+      const result = await completeChat({
+        provider,
+        apiKey,
+        signal: request.signal,
+        onUsage,
+        purpose: "test",
+        messages: [{ role: "user", content: "Reply only OK." }],
+      });
+      if (!dialog.isConnected || testController !== request) return;
+      if (request.signal.aborted) throw new DOMException("Aborted", "AbortError");
+      const passed =
+        result.content.trim() === "OK" && result.finishReason === "stop" && !result.refused;
+      testStatus.textContent = passed
+        ? `测试通过 · ${((performance.now() - start) / 1000).toFixed(1)} 秒 · 模型可正常回复。`
+        : result.finishReason === "length"
+          ? "接口已连通，但达到测试的 1,024 Token 上限；可调低思考程度后重试。"
+          : "接口已连通，但未完整返回预期的测试回复，请检查模型设置。";
+      testStatus.dataset.state = passed ? "success" : "warning";
+    } catch (error) {
+      if (dialog.isConnected && testController === request) {
+        testStatus.textContent = request.signal.aborted
+          ? "测试在 30 秒内未完成；可稍后重试或调低思考程度。"
+          : error instanceof ModelError
+            ? error.message
+            : "模型测试未完成，请检查配置后重试。";
+        testStatus.dataset.state = "error";
+      }
+    } finally {
+      clearTimeout(timeout);
+      if (testController === request) cancelTest();
+    }
+  });
   form.querySelector("#load-models").addEventListener("click", async () => {
+    invalidateTest();
     cancel();
     let baseUrl;
     try {
@@ -190,7 +272,9 @@ export function bindModelForm(dialog) {
           ? "读取超时，可稍后重试或选择常用模型"
           : error.name === "TypeError"
             ? "无法读取模型列表，请检查网络与浏览器跨域支持"
-            : error.message;
+            : error instanceof ModelError
+              ? error.message
+              : "无法读取模型列表，请检查接口配置后重试。";
     } finally {
       clearTimeout(timeout);
       if (controller === request) {

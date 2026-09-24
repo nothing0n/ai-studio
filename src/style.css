@@ -1847,96 +1847,61 @@ button svg {
 
 /* Account and local usage stay visible while the message list scrolls. */
 .usage-panel {
-  flex: 0 0 auto;
-  align-self: flex-end;
-  width: min(520px, calc(100% - 48px));
-  margin: 12px 24px 4px;
-  padding: 11px 16px;
-  border: 1px solid #e5e4ee;
-  border-radius: 12px;
-  background: #fff;
-  font-size: 12px;
-}
-.usage-panel-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 8px;
+  justify-content: flex-end;
+  gap: 7px;
+  flex: 0 0 auto;
+  align-self: flex-end;
+  max-width: calc(100% - 32px);
+  min-height: 28px;
+  margin: 3px 24px;
+  font-size: 11px;
   color: #78758a;
-}
-.usage-panel-head > span {
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
-.usage-panel-head select {
+.account-balance {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.usage-panel a,
+.usage-panel button,
+.usage-panel select {
+  color: inherit;
+  background: transparent;
+  font: inherit;
   border: 0;
-  border-radius: 5px;
-  padding: 2px 5px;
-  background: #f5f4fa;
-  color: #706881;
-  font-size: 11px;
-}
-.usage-panel-values {
-  display: grid;
-  grid-template-columns: 1fr 1.15fr;
-  gap: 16px;
-}
-.usage-panel-values > div {
-  min-width: 0;
-}
-.usage-panel-values .site-usage {
-  border-left: 1px solid #eeedf4;
-  padding-left: 16px;
-}
-.usage-panel-values span {
-  display: block;
-  font-size: 11px;
-  color: #888493;
-}
-.usage-panel-values strong {
-  display: block;
-  font-size: 22px;
-  line-height: 1.45;
-  font-weight: 650;
-  letter-spacing: -0.4px;
-  overflow-wrap: anywhere;
-}
-.usage-panel-values strong em {
-  font-size: 11px;
-  font-weight: 400;
-  font-style: normal;
-  letter-spacing: 0;
-  color: #8b8799;
-}
-.usage-panel-values small {
-  font-size: 10px;
-  color: #888493;
-}
-.balance-actions,
-.usage-coverage {
-  display: flex;
-  gap: 12px;
-  font-size: 10px;
-  line-height: 1.5;
-  margin-top: 4px;
-}
-.balance-actions a,
-.balance-actions button {
-  font-size: 10px;
-  color: #7663d8;
-  background: none;
-  padding: 0;
   text-decoration: none;
 }
-.usage-coverage {
-  color: #8a8498;
+.usage-panel a:hover,
+.usage-panel button:hover {
+  color: var(--accent);
+}
+.usage-panel button,
+.usage-panel select {
+  min-height: 28px;
+  padding: 2px;
+  cursor: pointer;
+}
+.usage-panel button {
+  min-width: 24px;
+  font-size: 15px;
+}
+.usage-panel button:disabled {
+  cursor: wait;
+  opacity: 0.45;
+}
+.usage-panel a,
+.site-usage [data-usage-total] {
+  color: #666174;
+}
+.usage-separator {
+  color: #bbb8c8;
 }
 .usage-warning {
   color: #ae7131;
-  margin: 6px 0 0;
-  font-size: 10px;
 }
 .sr-only {
   position: absolute;
@@ -1972,6 +1937,37 @@ button svg {
 .model-advanced {
   margin: 18px 0;
 }
+.connection-test {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 18px 0;
+}
+.connection-test > button {
+  flex-shrink: 0;
+}
+.connection-test [role="status"] {
+  font-size: 12px;
+  line-height: 1.6;
+  color: #888493;
+  overflow-wrap: anywhere;
+}
+[role="status"][data-state="success"] {
+  color: #348568;
+}
+[role="status"][data-state="error"] {
+  color: #b45353;
+}
+[role="status"][data-state="warning"] {
+  color: #ae7131;
+}
+.sync-explanation summary {
+  cursor: pointer;
+}
+#custom-repository-field,
+#custom-branch-field {
+  margin-top: 12px;
+}
 .model-advanced summary {
   cursor: pointer;
   color: #7c728a;
@@ -1984,30 +1980,9 @@ button svg {
 }
 @media (max-width: 760px) {
   .usage-panel {
-    align-self: stretch;
-    width: auto;
-    margin: 7px 10px 2px;
-    padding: 8px 10px;
-  }
-  .usage-panel-head {
-    margin-bottom: 5px;
-    font-size: 10px;
-  }
-  .usage-panel-values {
-    gap: 10px;
-  }
-  .usage-panel-values .site-usage {
-    padding-left: 10px;
-  }
-  .usage-panel-values strong {
-    font-size: 19px;
-  }
-  .usage-panel-values span {
-    font-size: 10px;
-  }
-  .usage-panel-values small,
-  .usage-coverage {
-    font-size: 9px;
+    max-width: calc(100% - 20px);
+    margin: 2px 10px;
+    gap: 5px;
   }
   .model-picker {
     gap: 7px;

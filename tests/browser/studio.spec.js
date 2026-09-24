@@ -398,7 +398,8 @@ test("private repository sync excludes credentials and is usable on another devi
   await expect(page.getByRole("button", { name: "发送消息" })).toBeVisible();
   await openSettings(page);
   await page.getByRole("tab", { name: "GitHub 同步" }).click();
-  await page.getByLabel("数据仓库", { exact: true }).fill("test-user/private-data");
+  await page.getByLabel("数据仓库", { exact: true }).selectOption("__custom__");
+  await page.getByLabel("手动仓库地址", { exact: true }).fill("test-user/private-data");
   await page.getByLabel("GitHub 访问令牌", { exact: true }).fill("fake-github-secret");
   await page.getByRole("button", { name: "连接并同步" }).click();
   await expect.poll(() => writes.length).toBeGreaterThan(1);
@@ -410,7 +411,8 @@ test("private repository sync excludes credentials and is usable on another devi
   await other.route("https://api.github.com/**", handler);
   await other.goto("http://127.0.0.1:4173/");
   await other.getByRole("button", { name: "连接 GitHub", exact: true }).click();
-  await other.getByLabel("数据仓库", { exact: true }).fill("test-user/private-data");
+  await other.getByLabel("数据仓库", { exact: true }).selectOption("__custom__");
+  await other.getByLabel("手动仓库地址", { exact: true }).fill("test-user/private-data");
   await other.getByLabel("GitHub 访问令牌", { exact: true }).fill("fake-github-secret");
   await other.getByRole("button", { name: "连接并同步" }).click();
   await expect(other.locator(".history-item")).toHaveCount(1);

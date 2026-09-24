@@ -57,11 +57,12 @@ import {
   clearSecrets,
 } from "./storage.js";
 import { completeChat, selectBot } from "./ai.js";
-import { GitHubStore, parseRepository } from "./github.js";
+import { GitHubStore } from "./github.js";
 import { prepareAvatar } from "./avatar.js";
 import { summarizeExperience } from "./experience.js";
-import { OPENAI_DEFAULT, DEFAULT_REPOSITORY, API_PLATFORMS } from "./platforms.js";
+import { OPENAI_DEFAULT, API_PLATFORMS } from "./platforms.js";
 import { renderModelForm, bindModelForm, providerFormValue } from "./model-form.js";
+import { renderGitHubForm, bindGitHubForm, githubFormValue } from "./github-form.js";
 import { createUsagePanel } from "./usage-panel.js";
 import { saveUsage, isUsageKey } from "./usage.js";
 
@@ -819,11 +820,16 @@ function showSettings(tab = "models") {
     "settings-dialog",
   );
   if (tab === "models") {
-    bindModelForm(dialog);
+    bindModelForm(dialog, {
+      providerId: providers().find((p) => p.id === ui.editingProvider)?.id || uid(),
+      onUsage: recordUsage,
+    });
     dialog.querySelector("#provider-form")?.addEventListener("submit", saveProvider);
   }
-  if (tab === "github")
+  if (tab === "github") {
+    bindGitHubForm(dialog);
     dialog.querySelector("#github-form").addEventListener("submit", connectGitHub);
+  }
   if (tab === "data") dialog.querySelector("#import-file").addEventListener("change", importBackup);
 }
 function modelsSettings() {
@@ -848,7 +854,7 @@ function saveProvider(event) {
   try {
     const existing = providers().find((p) => p.id === ui.editingProvider);
     const provider = {
-      id: existing?.id || uid(),
+      id: existing?.id || event.currentTarget.dataset.providerId || uid(),
       ...providerFormValue(event.currentTarget),
       updatedAt: now(),
       deletedAt: null,
@@ -881,17 +887,20 @@ function saveProvider(event) {
   }
 }
 function githubSettings() {
-  return `<div class="setup-note github-note">${icon("github")}<div>网页与聊天数据分开保存。这里连接的必须是 <strong>Private 私有仓库</strong>，可以是空仓库。</div></div><form id="github-form">${field("数据仓库", '<input name="repository" required placeholder="你的用户名/私有数据仓库" value="' + esc(device.repository || DEFAULT_REPOSITORY) + '">')}${field("GitHub 访问令牌", '<input name="token" type="password" required autocomplete="off" placeholder="github_pat_…" value="' + esc(getSecrets().github?.token) + '">', "仅授权这个仓库的 Contents → Read and write。令牌只保存在本次浏览器会话。")}${field("分支（可选）", '<input name="branch" placeholder="留空使用仓库默认分支" value="' + esc(device.branch) + '">')}<div class="help-links"><a href="https://github.com/new" target="_blank" rel="noopener noreferrer">创建私有仓库 ${icon("external-link")}</a><a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer">创建访问令牌 ${icon("external-link")}</a></div><div class="sync-explanation"><strong>同步会怎样工作</strong><p>每轮回答完成后自动保存；打开网页或回到页面时拉取更新。两个设备的新增消息会合并。同步失败时保留本机记录。</p><p>仓库保留历史版本，删除会话不会抹去 Git 历史。模型密钥与 GitHub 令牌不会写入仓库。</p></div>${ui.syncError ? `<div class="inline-error">${esc(ui.syncError)}</div>` : ""}<div class="form-actions">${device.repository ? '<button class="secondary-button" type="button" data-action="disconnect">断开同步</button>' : ""}<button class="primary-button" type="submit" ${ui.syncBusy ? "disabled" : ""}>${icon("refresh-cw")}连接并同步</button></div></form>`;
+  return renderGitHubForm({
+    repository: device.repository,
+    branch: device.branch,
+    token: getSecrets().github?.token,
+    busy: ui.syncBusy,
+    error: ui.syncError,
+  });
 }
 async function connectGitHub(event) {
   event.preventDefault();
-  const form = new FormData(event.currentTarget);
   try {
-    const repository = parseRepository(String(form.get("repository"))),
-      token = String(form.get("token")).trim();
-    if (!token) throw new Error("请填写 GitHub 访问令牌");
+    const { repository, branch, token } = githubFormValue(event.currentTarget);
     device.repository = repository;
-    device.branch = String(form.get("branch")).trim();
+    device.branch = branch;
     rememberDevice();
     const secrets = getSecrets();
     secrets.github = { token };

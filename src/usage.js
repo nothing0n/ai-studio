@@ -31,7 +31,9 @@ export function saveUsage(record, storage = localStorage) {
     model: String(record.model || "").slice(0, 160),
     startedAt: record.startedAt,
     updatedAt: record.updatedAt,
-    purpose: ["chat", "router", "summary"].includes(record.purpose) ? record.purpose : "chat",
+    purpose: ["chat", "router", "summary", "test"].includes(record.purpose)
+      ? record.purpose
+      : "chat",
     status: ["pending", "success", "error", "aborted"].includes(record.status)
       ? record.status
       : "pending",

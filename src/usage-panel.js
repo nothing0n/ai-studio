@@ -67,19 +67,25 @@ export function createUsagePanel({ provider: getProvider, key: getKey }) {
               : platform.id === "openai"
                 ? "普通密钥无法直接查询余额"
                 : "此接口暂不支持余额查询";
-    return `<div class="usage-panel-head"><span title="${esc(provider?.name)}">${esc(provider?.name || "余额与用量")}</span><label><span class="sr-only">用量时间范围</span><select id="usage-period" aria-label="用量时间范围">${[
-      ["today", "今日"],
-      ["month", "本月"],
-      ["all", "累计"],
-    ]
-      .map(
-        ([value, name]) =>
-          `<option value="${value}" ${period === value ? "selected" : ""}>${name}</option>`,
-      )
-      .join("")}</select></label></div>
-      <div class="usage-panel-values"><div class="account-balance"><span>账户余额</span><strong data-balance-value>${balance || "—"}</strong><small title="${esc(entry?.error || note)}">${note}</small><div class="balance-actions">${dashboard ? `<a href="${platform.billing || dashboard}" target="_blank" rel="noopener noreferrer">${platform.billing ? "查看平台余额 ↗" : "官方控制台 ↗"}</a>` : '<button type="button" data-action="settings">配置连接</button>'}${supported ? `<button id="refresh-balance" type="button" ${entry?.loading ? "disabled" : ""} aria-label="刷新账户余额">刷新</button>` : ""}</div></div>
-      <div class="site-usage"><span>本网页用量 · 本浏览器</span><strong data-usage-total>${num(stats.total)} <em>Token</em></strong><small>输入 ${num(stats.input)} · 输出 ${num(stats.output)}</small><div class="usage-coverage">${stats.requests} 次请求${stats.unknown ? ` · ${stats.unknown} 次用量未返回` : ""}${stats.pending ? ` · ${stats.pending} 次结果未确认` : ""}</div></div></div>
-      ${incomplete ? '<p class="usage-warning">部分用量未能保存，统计可能不完整</p>' : ""}`;
+    const balanceDetails = `${provider?.name || "账户余额"} · ${note}${entry?.error ? ` · ${entry.error}` : ""}`;
+    const balanceLabel = `余额 <span data-balance-value>${balance || (dashboard ? "↗" : "—")}</span>`;
+    const usageDetails = `${provider?.name || "当前连接"} · 本网页用量 · 本浏览器 · 输入 ${num(stats.input)} · 输出 ${num(stats.output)} · ${stats.requests} 次请求${stats.unknown ? ` · ${stats.unknown} 次用量未返回` : ""}${stats.pending ? ` · ${stats.pending} 次结果未确认` : ""}${incomplete ? " · 部分用量未能保存，统计可能不完整" : ""}`;
+    const usageUnknown = stats.total == null || (incomplete && !stats.requests);
+    const usageStatus = incomplete || stats.unknown ? "部分" : stats.pending ? "待更新" : "";
+    return `<span class="account-balance" title="${esc(balanceDetails)}">
+      ${dashboard ? `<a href="${platform.billing || dashboard}" target="_blank" rel="noopener noreferrer" aria-label="查看平台账户余额：${esc(balanceDetails)}">${balanceLabel}</a>` : `<span aria-label="${esc(balanceDetails)}">${balanceLabel}</span>`}${entry?.error || entry?.data?.available === false ? '<span class="usage-warning" aria-label="余额状态异常">!</span>' : ""}${supported ? `<button id="refresh-balance" type="button" ${entry?.loading ? "disabled" : ""} title="刷新账户余额" aria-label="刷新账户余额">↻</button>` : ""}
+      </span><span class="usage-separator" aria-hidden="true">·</span>
+      <label><span class="sr-only">用量时间范围</span><select id="usage-period" aria-label="用量时间范围">${[
+        ["today", "今日"],
+        ["month", "本月"],
+        ["all", "累计"],
+      ]
+        .map(
+          ([value, name]) =>
+            `<option value="${value}" ${period === value ? "selected" : ""}>${name}</option>`,
+        )
+        .join("")}</select></label>
+      <span class="site-usage" title="${esc(usageDetails)}" aria-label="${esc(usageDetails)}">${usageUnknown ? `<span data-usage-total>${stats.pending ? "用量待更新" : incomplete ? "用量未完整记录" : "用量未返回"}</span>` : `已用 <span data-usage-total>${num(stats.total)} Token</span>${usageStatus ? `<span class="usage-warning"> · ${usageStatus}</span>` : ""}`}</span>`;
   }
   function paint() {
     const panel = document.querySelector("#usage-panel");

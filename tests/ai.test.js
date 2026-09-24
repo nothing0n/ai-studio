@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { completeChat, sseEvents, selectBot } from "../src/ai.js";
+import { completeChat, sseEvents, selectBot, fetchModels } from "../src/ai.js";
 const provider = { baseUrl: "https://model.example/v1", model: "test" };
 function streamResponse(text, chunkSize = 1) {
   const bytes = new TextEncoder().encode(text);
@@ -85,6 +85,21 @@ test("HTTP errors do not expose upstream secrets", async () => {
     }),
     (error) => error.message.includes("密钥") && !error.message.includes("SECRET"),
   );
+});
+test("invalid JSON cannot expose response excerpts in chat or model-discovery errors", async () => {
+  const fetchImpl = async () =>
+    new Response("CANARY_FAKE_KEY_123", {
+      headers: { "Content-Type": "application/json" },
+    });
+  for (const call of [
+    () => completeChat({ provider, messages: [], fetchImpl }),
+    () => fetchModels({ baseUrl: provider.baseUrl, fetchImpl }),
+  ]) {
+    await assert.rejects(
+      call(),
+      (error) => error.message.includes("格式不正确") && !error.message.includes("CANARY"),
+    );
+  }
 });
 test("compatible JSON response and length finish reason are accepted", async () => {
   const result = await completeChat({
