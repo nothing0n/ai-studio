@@ -17,6 +17,9 @@
 body {
   margin: 0;
 }
+[hidden] {
+  display: none !important;
+}
 button,
 input,
 textarea,
@@ -1583,4 +1586,261 @@ button svg {
     animation: none !important;
     transition: none !important;
   }
+}
+/* People and their conversations */
+.member-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: 16px;
+}
+.member-group {
+  margin-bottom: 12px;
+}
+.member-row {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  border-radius: 10px;
+}
+.member-row:has(.bot-nav.active) {
+  background: #303044;
+}
+.member-row .bot-nav {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+  padding: 10px 3px;
+  gap: 9px;
+}
+.member-row .bot-nav > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.member-row .bot-nav.active {
+  background: transparent;
+}
+.member-row .avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+}
+.member-expand {
+  padding: 4px;
+  color: #9795a8;
+}
+.member-expand svg {
+  width: 12px;
+  height: 12px;
+  transform: rotate(-90deg);
+}
+.member-expand.expanded svg {
+  transform: none;
+}
+.member-new,
+.member-edit {
+  padding: 5px;
+  color: #b3afc3;
+}
+.member-new svg,
+.member-edit svg {
+  width: 14px;
+  height: 14px;
+}
+.member-sessions {
+  margin: 4px 0 2px 28px;
+  padding-left: 11px;
+  border-left: 1px solid #353544;
+}
+.member-sessions .history-item {
+  margin: 2px 0;
+}
+.member-sessions .history-item > button:first-child {
+  padding: 10px 8px;
+}
+.member-sessions .history-item svg {
+  width: 14px;
+  height: 14px;
+}
+.avatar {
+  overflow: hidden;
+}
+.avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.chat-contact {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.chat-contact > .avatar {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+}
+.chat-contact > div {
+  min-width: 0;
+}
+.chat-contact strong {
+  font-size: 15px;
+  font-weight: 600;
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 25vw;
+}
+.session-caption {
+  display: flex;
+  align-items: center;
+  font-size: 11px;
+  color: #9293a2;
+  gap: 5px;
+  max-width: 28vw;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-caption .icon-button {
+  padding: 2px;
+  flex-shrink: 0;
+}
+.session-caption svg {
+  width: 12px;
+  height: 12px;
+}
+.contact-settings {
+  color: #9293a2;
+}
+.memory-button {
+  font-size: 12px;
+  gap: 6px;
+}
+.avatar-editor {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 24px;
+  flex-wrap: wrap;
+}
+.avatar-editor .avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+}
+.avatar-editor .avatar svg {
+  width: 28px;
+  height: 28px;
+}
+.avatar-help {
+  font-size: 11px;
+  color: #858797;
+}
+.experience-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: -6px 0 24px;
+}
+.experience-actions [role="status"] {
+  font-size: 12px;
+  line-height: 1.6;
+  color: #858797;
+}
+#summary-draft {
+  background: #f7f6fc;
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 20px;
+}
+.route-chip:disabled {
+  cursor: default;
+  opacity: 1;
+}
+@media (max-width: 700px) {
+  .chat-contact {
+    gap: 8px;
+    flex: 1;
+  }
+  .chat-contact > .avatar {
+    width: 30px;
+    height: 30px;
+  }
+  .chat-contact strong {
+    max-width: 23vw;
+    font-size: 13px;
+  }
+  .session-caption {
+    max-width: 24vw;
+    font-size: 10px;
+  }
+  .contact-settings {
+    padding: 3px;
+  }
+  .contact-settings svg {
+    width: 16px;
+    height: 16px;
+  }
+  .memory-button {
+    padding: 7px;
+  }
+  .memory-button span {
+    display: none;
+  }
+  .memory-button svg {
+    width: 17px;
+    height: 17px;
+  }
+  .topbar {
+    padding-inline: 10px;
+    gap: 5px;
+  }
+  .experience-actions {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+.platform-directory {
+  margin-top: 24px;
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+}
+.platform-directory summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: #666174;
+}
+.platform-directory article {
+  padding: 15px 0;
+  border-bottom: 1px solid var(--line);
+}
+.platform-directory article strong {
+  font-size: 13px;
+}
+.platform-directory article div {
+  display: flex;
+  gap: 18px;
+  margin-top: 8px;
+}
+.platform-directory a {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  font-size: 12px;
+  color: #6d5dfc;
+}
+.platform-directory a svg {
+  width: 12px;
+  height: 12px;
+}
+.platform-directory small {
+  display: block;
+  color: #888493;
+  font-size: 11px;
+  margin-top: 7px;
 }

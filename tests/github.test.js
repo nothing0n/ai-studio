@@ -169,3 +169,61 @@ test("deletion racing with upload produces a persisted recovery copy", async () 
   assert.ok(recovered && recovered.id.startsWith("recovery_"));
   assert.ok(server.files.has(`studio-data/conversations/${recovered.id}.json`));
 });
+
+test("a conflict copy changed during an original-file retry is uploaded again", async () => {
+  const server = remoteServer(),
+    state = initialState();
+  const bot = { ...state.bots[0], id: "member", name: "成员", prompt: "A" };
+  state.bots.push(bot);
+  const local = createConversation(bot);
+  local.id = "shared";
+  local.messages = [
+    {
+      id: "base",
+      role: "user",
+      content: "共同历史",
+      createdAt: "2026-09-24T01:00:00.000Z",
+      updatedAt: "2026-09-24T01:00:00.000Z",
+      status: "complete",
+    },
+  ];
+  state.conversations = [local];
+  const remote = clone(local);
+  remote.profileSnapshot.prompt = "B";
+  const originalPath = "studio-data/conversations/shared.json";
+  server.set(configPath, {
+    schemaVersion: state.schemaVersion,
+    bots: state.bots,
+    providers: state.providers,
+  });
+  server.set(originalPath, remote);
+  let raced = false;
+  function injectConcurrentWrite(path) {
+    if (path !== originalPath) {
+      server.beforeWrite = injectConcurrentWrite;
+      return;
+    }
+    const latest = clone(server.files.get(path).data);
+    latest.messages.push({
+      ...latest.messages[0],
+      id: "remote-race",
+      content: "B 人设在并发写入时新增的消息",
+    });
+    server.set(path, latest);
+    raced = true;
+  }
+  server.beforeWrite = injectConcurrentWrite;
+  const result = await store(server).sync(state);
+  assert.ok(raced);
+  const copy = result.state.conversations.find((chat) => chat.profileSnapshot?.prompt === "B");
+  assert.ok(copy);
+  const copyPath = `studio-data/conversations/${copy.id}.json`;
+  assert.ok(
+    server.files.get(copyPath).data.messages.some((message) => message.id === "remote-race"),
+  );
+  assert.equal(server.writes.filter((write) => write.path === copyPath).length, 2);
+  assert.equal(server.files.get(originalPath).data.profileSnapshot.prompt, "A");
+  const writeCount = server.writes.length;
+  await store(server, result.cache).sync(result.state);
+  assert.equal(server.writes.length, writeCount);
+});

@@ -62,6 +62,8 @@ export function migrateLegacyBots(bots, defaultButler) {
           (original) =>
             original.id !== "butler" &&
             !bot.deletedAt &&
+            !bot.experience &&
+            !bot.avatarData &&
             Object.entries(original).every(
               ([key, value]) => key === "updatedAt" || bot[key] === value,
             ),

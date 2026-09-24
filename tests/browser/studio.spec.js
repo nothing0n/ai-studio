@@ -43,6 +43,168 @@ async function addRole(page, name, keywords) {
 const reply = (content) =>
   `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\ndata: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`;
 
+async function openMembers(page) {
+  const menu = page.getByRole("button", { name: "打开角色和历史对话", exact: true });
+  if (await menu.isVisible()) await menu.click();
+}
+async function editMember(page, name) {
+  await openMembers(page);
+  await page.getByRole("button", { name: `编辑${name}`, exact: true }).click();
+}
+async function startMemberChat(page, name) {
+  await openMembers(page);
+  await page.getByRole("button", { name: `与${name}新建会话`, exact: true }).click();
+}
+async function savedData(page) {
+  return page.evaluate(() => JSON.parse(localStorage.getItem("ai-studio:data:v1")));
+}
+
+test("OpenAI and data repository defaults survive reload and official API links are available", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.reload();
+  await openSettings(page);
+  await expect(page.getByLabel("接口地址（Base URL）", { exact: true })).toHaveValue(
+    "https://api.openai.com/v1",
+  );
+  await expect(page.getByLabel("模型名称", { exact: true })).toHaveValue("gpt-5.4");
+  await expect(page.getByLabel("API Key", { exact: true })).toBeEmpty();
+  await page.locator(".platform-directory summary").click();
+  await expect(page.locator(".platform-directory article")).toHaveCount(7);
+  await expect(page.locator(".platform-directory a")).toHaveCount(14);
+  await expect(page.locator('a[href="https://platform.openai.com/api-keys"]')).toBeVisible();
+  await page.getByRole("tab", { name: "GitHub 同步" }).click();
+  await expect(page.getByLabel("数据仓库", { exact: true })).toHaveValue(
+    "nothing0n/ai-studio-data",
+  );
+  await expect(page.getByLabel("GitHub 访问令牌", { exact: true })).toBeEmpty();
+});
+
+test("member sessions retain their own starting profile and avatar across edits and reload", async ({
+  page,
+}, info) => {
+  const requests = [];
+  await page.route("https://model.example/**", async (route) => {
+    requests.push(route.request().postDataJSON());
+    await route.fulfill({ contentType: "text/event-stream", body: reply("已收到") });
+  });
+  await page.goto("/");
+  await addModel(page);
+  await addRole(page, "写作助手", "写作");
+  await editMember(page, "写作助手");
+  await page.getByLabel("角色指令", { exact: true }).fill("初始人设：语言精简");
+  await page.getByLabel("经验总结", { exact: true }).fill("初始经验：使用中文");
+  const png = await page.evaluate(() => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 240;
+    canvas.height = 160;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#0d9488";
+    ctx.fillRect(0, 0, 240, 160);
+    return canvas.toDataURL("image/png").split(",")[1];
+  });
+  await page
+    .locator("#avatar-file")
+    .setInputFiles({
+      name: "avatar.png",
+      mimeType: "image/png",
+      buffer: Buffer.from(png, "base64"),
+    });
+  await expect(page.locator("#avatar-preview img")).toBeVisible();
+  await page.screenshot({ path: `.local/${info.project.name}-member.png`, fullPage: true });
+  await page.getByRole("button", { name: "保存角色", exact: true }).click();
+  await startMemberChat(page, "写作助手");
+  await send(page, "第一段会话");
+  await expect(page.locator(".assistant-message")).toContainText("已收到");
+  await expect(page.getByRole("button", { name: "发送消息", exact: true })).toBeVisible();
+  await editMember(page, "写作助手");
+  await page.getByLabel("角色指令", { exact: true }).fill("新的人设：充分解释");
+  await page.getByLabel("经验总结", { exact: true }).fill("新的经验：列出例子");
+  await page.getByRole("button", { name: "保存角色", exact: true }).click();
+  await send(page, "继续第一段会话");
+  await expect(page.locator(".assistant-message")).toHaveCount(2);
+  await expect(page.getByRole("button", { name: "发送消息", exact: true })).toBeVisible();
+  expect(requests[1].messages[0].content).toContain("初始人设");
+  expect(requests[1].messages[0].content).toContain("初始经验");
+  expect(requests[1].messages[0].content).not.toContain("新的经验");
+  await startMemberChat(page, "写作助手");
+  await send(page, "第二段会话");
+  await expect(page.locator(".assistant-message")).toContainText("已收到");
+  await expect(page.getByRole("button", { name: "发送消息", exact: true })).toBeVisible();
+  expect(requests[2].messages[0].content).toContain("新的人设");
+  expect(requests[2].messages[0].content).toContain("新的经验");
+  expect(requests[2].messages).toHaveLength(2);
+  const data = await savedData(page),
+    member = data.bots.find((bot) => bot.name === "写作助手");
+  expect(member.avatarData).toMatch(/^data:image\/(webp|png);base64,/);
+  expect(member.avatarData.length).toBeLessThanOrEqual(16000);
+  expect(data.conversations.filter((chat) => chat.ownerBotId === member.id)).toHaveLength(2);
+  await openMembers(page);
+  await page.locator('.bot-nav[data-bot="butler"]').click();
+  await expect(page.locator(".chat-area")).toBeEmpty();
+  await openMembers(page);
+  await page.locator(`.bot-nav[data-bot="${member.id}"]`).click();
+  await expect(page.locator(".user-message")).toContainText("第二段会话");
+  await page.reload();
+  await expect(page.locator(".user-message")).toContainText("第二段会话");
+  await expect(page.locator(`.member-group[data-member="${member.id}"] .history-item`)).toHaveCount(
+    2,
+  );
+  await expect(page.locator(".chat-contact img")).toBeVisible();
+});
+
+test("experience generation stays a draft until saved and preserves edits made while generating", async ({
+  page,
+}) => {
+  let generated = 0,
+    release;
+  await page.route("https://model.example/**", async (route) => {
+    const request = route.request().postDataJSON();
+    if (request.stream === false) {
+      generated++;
+      if (generated === 2)
+        await new Promise((resolve) => {
+          release = resolve;
+        });
+      return route.fulfill({
+        json: {
+          choices: [{ message: { content: "确认后的经验：先给结论" }, finish_reason: "stop" }],
+        },
+      });
+    }
+    return route.fulfill({ contentType: "text/event-stream", body: reply("这次先给结论，再解释") });
+  });
+  await page.goto("/");
+  await addModel(page);
+  await send(page, "帮我整理工作方法");
+  await expect(page.locator(".assistant-message")).toContainText("先给结论");
+  await expect(page.getByRole("button", { name: "发送消息", exact: true })).toBeVisible();
+  await editMember(page, "管家");
+  await page.getByRole("button", { name: "从当前会话生成", exact: true }).click();
+  await expect(page.getByLabel("经验总结", { exact: true })).toHaveValue("确认后的经验：先给结论");
+  expect((await savedData(page)).bots.find((bot) => bot.id === "butler").experience).toBe("");
+  await closeDialog(page);
+  await editMember(page, "管家");
+  await expect(page.getByLabel("经验总结", { exact: true })).toBeEmpty();
+  await page.getByRole("button", { name: "从当前会话生成", exact: true }).click();
+  await expect.poll(() => generated).toBe(2);
+  await page.getByLabel("经验总结", { exact: true }).fill("我正在手动编辑");
+  release();
+  await expect(page.getByLabel("生成的经验草稿", { exact: true })).toHaveValue(
+    "确认后的经验：先给结论",
+  );
+  await expect(page.getByLabel("经验总结", { exact: true })).toHaveValue("我正在手动编辑");
+  await page.getByRole("button", { name: "采用这份草稿", exact: true }).click();
+  await page.getByRole("button", { name: "保存角色", exact: true }).click();
+  const saved = await savedData(page);
+  expect(saved.bots.find((bot) => bot.id === "butler").experience).toBe("确认后的经验：先给结论");
+  expect(saved.conversations[0].profileSnapshot.experience).toBe("");
+  await startMemberChat(page, "管家");
+  const fresh = (await savedData(page)).conversations.find((chat) => !chat.messages.length);
+  expect(fresh.profileSnapshot.experience).toBe("确认后的经验：先给结论");
+});
+
 test("records recovered from another tab remain on disk after reload", async ({ page }) => {
   await page.goto("/");
   const first = initialState(),
@@ -115,10 +277,10 @@ test("responsive workspace, configuration, routing, continuation and secret-free
   await expect(page.locator(".assistant-message .message-content")).toContainText("可执行方案");
   await expect(page.getByRole("button", { name: "发送消息", exact: true })).toBeVisible();
   expect(requests[0].messages[0].content).toContain("关卡策划");
-  await send(page, "请交给系统策划，设计奖励系统");
+  await send(page, "继续细化关卡方案");
   await expect(page.locator(".assistant-message")).toHaveCount(2);
   await expect(page.getByRole("button", { name: "发送消息", exact: true })).toBeVisible();
-  expect(requests[1].messages[0].content).toContain("系统策划");
+  expect(requests[1].messages[0].content).toContain("关卡策划");
   expect(requests[1].messages.some((m) => m.content.includes("可执行方案"))).toBe(true);
   await page.screenshot({ path: `.local/${info.project.name}-chat.png`, fullPage: true });
   await openSettings(page);
@@ -278,7 +440,7 @@ test("imported markup and malicious timestamps cannot execute scripts", async ({
   await closeDialog(page);
   if (await page.getByRole("button", { name: "打开角色和历史对话" }).isVisible())
     await page.getByRole("button", { name: "打开角色和历史对话" }).click();
-  await page.locator(".history-item>button").first().click();
+  await page.locator('.member-group[data-member="level"] .bot-nav').click();
   await expect(page.locator(".message-content")).toContainText("安全正文");
   expect(await page.evaluate(() => window.pwned)).toBeUndefined();
   await expect(page.locator(".message img,.message script,[onerror]")).toHaveCount(0);

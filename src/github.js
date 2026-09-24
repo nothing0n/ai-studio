@@ -207,11 +207,11 @@ export class GitHubStore {
     });
     merged.bots = savedConfig.bots;
     merged.providers = savedConfig.providers;
-    const processed = new Set();
-    while (merged.conversations.some((chat) => !processed.has(chat.id))) {
-      const chat = merged.conversations.find((chat) => !processed.has(chat.id));
-      processed.add(chat.id);
-      if (!chat.messages.length && !chat.deletedAt) continue;
+    const processed = new Map();
+    while (merged.conversations.some((chat) => processed.get(chat.id) !== stable(chat))) {
+      const chat = merged.conversations.find((chat) => processed.get(chat.id) !== stable(chat));
+      processed.set(chat.id, stable(chat));
+      if (!chat.messages.length && !chat.deletedAt && !chat.profileSnapshot) continue;
       const path = `${PREFIX}/conversations/${chat.id}.json`;
       if (this.cache[path] && stable(this.cache[path].data) === stable(chat)) continue;
       const saved = await this.writeMerged(path, chat, (a, b) => {

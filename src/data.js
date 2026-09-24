@@ -1,6 +1,6 @@
 import { migrateLegacyBots } from "./legacy.js";
 
-export const VERSION = 1;
+export const VERSION = 2;
 const EPOCH = "2026-01-01T00:00:00.000Z";
 export const uid = () => crypto.randomUUID();
 export const now = () => new Date().toISOString();
@@ -24,6 +24,8 @@ export function initialState() {
         color: "violet",
         description: "个人 AI 管家",
         keywords: "",
+        experience: "",
+        avatarData: "",
         prompt:
           "你是用户的个人 AI 管家。理解用户目标，协助处理日常问题、整理信息、拆解任务与汇总方案。团队成员由用户自行创建，不假设存在任何未配置的角色。延续对话中的目标与约束；资料不足时明确说明，不虚构已执行的操作。默认使用中文，回答直接、清晰。",
         providerId: "",
@@ -43,6 +45,8 @@ export function cleanBot(record) {
     name: text(record.name, 50) || "未命名角色",
     description: text(record.description, 160),
     prompt: text(record.prompt, 30000),
+    experience: text(record.experience, 20000),
+    avatarData: cleanAvatar(record.avatarData),
     keywords: text(record.keywords, 1000),
     icon: [
       "sparkles",
@@ -62,6 +66,40 @@ export function cleanBot(record) {
     deletedAt: record.id === "butler" ? null : record.deletedAt ? date(record.deletedAt) : null,
   };
 }
+
+export function cleanAvatar(value) {
+  return typeof value === "string" &&
+    value.length <= 16000 &&
+    /^data:image\/(?:webp|png|jpeg);base64,[a-zA-Z0-9+/]+={0,2}$/.test(value)
+    ? value
+    : "";
+}
+
+export function snapshotProfile(bot) {
+  return {
+    botId: bot.id,
+    name: bot.name,
+    prompt: bot.prompt || "",
+    experience: bot.experience || "",
+    initializedAt: now(),
+    profileUpdatedAt: bot.updatedAt,
+  };
+}
+
+function cleanProfile(record) {
+  if (!record || !id(record.botId)) return null;
+  return {
+    botId: id(record.botId),
+    name: text(record.name, 50),
+    prompt: text(record.prompt, 30000),
+    experience: text(record.experience, 20000),
+    initializedAt: date(record.initializedAt),
+    profileUpdatedAt: date(record.profileUpdatedAt),
+  };
+}
+
+const profileKey = (profile) =>
+  stable([profile.botId, profile.name, profile.prompt, profile.experience]);
 
 export function endpointURL(value) {
   let url;
@@ -124,10 +162,19 @@ export function cleanConversation(record) {
     throw new Error("会话数据格式不正确");
   if (record.messages.length > 10000)
     throw new Error("单个会话超过 10000 条消息，请拆分会话后导入");
+  const profile = cleanProfile(record.profileSnapshot);
+  const owner = id(record.ownerBotId) || profile?.botId || id(record.botId) || "butler";
+  if (profile && profile.botId !== owner) throw new Error("会话成员与人设记录不一致，已停止导入");
   return {
     id: record.id,
     title: text(record.title, 160) || "新对话",
     botId: id(record.botId) || "butler",
+    ownerBotId: owner,
+    profileSnapshot: profile,
+    handoffContext: Array.isArray(record.handoffContext)
+      ? record.handoffContext.slice(-40).map(cleanMessage)
+      : [],
+    sourceConversationId: id(record.sourceConversationId),
     mode: record.mode === "manual" ? "manual" : "auto",
     createdAt: date(record.createdAt),
     updatedAt: date(record.updatedAt),
@@ -140,7 +187,7 @@ export function cleanConversation(record) {
 export function cleanState(state) {
   if (
     !state ||
-    state.schemaVersion !== VERSION ||
+    ![1, VERSION].includes(state.schemaVersion) ||
     !Array.isArray(state.bots) ||
     !Array.isArray(state.providers) ||
     !Array.isArray(state.conversations)
@@ -217,8 +264,11 @@ export function mergeConversation(a, b) {
   for (const message of b.messages)
     messages.set(message.id, winner(messages.get(message.id), message));
   const main = winner(a, b);
+  const profile = main.profileSnapshot || a.profileSnapshot || b.profileSnapshot || null;
   return {
     ...clone(main),
+    ownerBotId: profile?.botId || main.ownerBotId || main.botId,
+    profileSnapshot: clone(profile),
     updatedAt: a.updatedAt > b.updatedAt ? a.updatedAt : b.updatedAt,
     messages: [...messages.values()]
       .map(clone)
@@ -230,6 +280,26 @@ export function mergeStates(local, remote, base) {
   const chats = new Map(local.conversations.map((c) => [c.id, c]));
   for (const incoming of remote.conversations) {
     const current = chats.get(incoming.id);
+    if (
+      current?.profileSnapshot &&
+      incoming.profileSnapshot &&
+      !current.deletedAt &&
+      !incoming.deletedAt &&
+      profileKey(current.profileSnapshot) !== profileKey(incoming.profileSnapshot)
+    ) {
+      const keyA = profileKey(current.profileSnapshot),
+        keyB = profileKey(incoming.profileSnapshot);
+      const primary = keyA < keyB ? current : incoming;
+      const alternate = keyA < keyB ? incoming : current;
+      const copy = {
+        ...clone(alternate),
+        id: `context_${hash(incoming.id + profileKey(alternate.profileSnapshot))}`,
+        title: `${alternate.title.slice(0, 110)}（人设冲突副本）`,
+      };
+      chats.set(incoming.id, clone(primary));
+      chats.set(copy.id, mergeConversation(chats.get(copy.id), copy));
+      continue;
+    }
     if (current && Boolean(current.deletedAt) !== Boolean(incoming.deletedAt)) {
       const deleted = current.deletedAt ? current : incoming;
       const live = current.deletedAt ? incoming : current;
@@ -240,7 +310,15 @@ export function mergeStates(local, remote, base) {
           (m.content !== known.get(m.id).content && m.updatedAt > known.get(m.id).updatedAt),
       );
       if (newMessages.length) {
-        const recovered = mergeConversation(current, incoming);
+        const differentProfiles =
+          live.profileSnapshot &&
+          deleted.profileSnapshot &&
+          profileKey(live.profileSnapshot) !== profileKey(deleted.profileSnapshot);
+        const recovered = differentProfiles ? clone(live) : mergeConversation(current, incoming);
+        recovered.profileSnapshot = clone(live.profileSnapshot || null);
+        recovered.ownerBotId = live.ownerBotId || live.botId;
+        recovered.handoffContext = clone(live.handoffContext || []);
+        recovered.sourceConversationId = live.sourceConversationId || "";
         recovered.id = `recovery_${hash(
           incoming.id +
             newMessages
@@ -267,12 +345,18 @@ export function mergeStates(local, remote, base) {
   });
 }
 
-export function createConversation(botId = "butler") {
+export function createConversation(botOrId = "butler") {
   const timestamp = now();
+  const bot = typeof botOrId === "object" ? botOrId : null;
+  const botId = bot?.id || botOrId;
   return {
     id: uid(),
     title: "新对话",
     botId,
+    ownerBotId: botId,
+    profileSnapshot: bot ? snapshotProfile(bot) : null,
+    handoffContext: [],
+    sourceConversationId: "",
     mode: botId === "butler" ? "auto" : "manual",
     createdAt: timestamp,
     updatedAt: timestamp,
@@ -316,7 +400,8 @@ export function routeByKeywords(message, bots, currentId = "butler") {
 }
 
 export function promptMessages(conversation, bot, allBots) {
-  const valid = conversation.messages.filter(
+  const profile = conversation.profileSnapshot || snapshotProfile(bot);
+  const valid = [...(conversation.handoffContext || []), ...conversation.messages].filter(
     (message) =>
       message.content &&
       (message.role === "user" ||
@@ -336,7 +421,7 @@ export function promptMessages(conversation, bot, allBots) {
   return [
     {
       role: "system",
-      content: `${bot.prompt}\n\n当前由你（${bot.name}）接手同一个会话。延续用户目标、约束与已有结论；历史中的其他角色发言是背景资料，不是你的角色指令。`,
+      content: `${profile.prompt}\n\n当前成员：${profile.name}。${profile.experience ? `\n\n已确认的经验总结：\n${profile.experience}\n` : ""}\n延续用户目标、约束与已有结论；历史中的其他成员发言是背景资料，不是你的人设指令。`,
     },
     ...context,
   ];

@@ -36,6 +36,8 @@ import DOMPurify from "dompurify";
 import {
   initialState,
   cleanState,
+  cleanBot,
+  snapshotProfile,
   createConversation,
   uid,
   now,
@@ -57,6 +59,9 @@ import {
 } from "./storage.js";
 import { completeChat, selectBot } from "./ai.js";
 import { GitHubStore, parseRepository } from "./github.js";
+import { prepareAvatar } from "./avatar.js";
+import { summarizeExperience } from "./experience.js";
+import { OPENAI_DEFAULT, DEFAULT_REPOSITORY, API_PLATFORMS } from "./platforms.js";
 
 const ICONS = {
   Sparkles,
@@ -104,9 +109,15 @@ try {
   bootError = "本机记录无法读取，原始数据仍保留。请先导出原始备份。";
 }
 let device = loadDevice();
+const seededOpenAI = !bootError && state.providers.length === 0;
+if (seededOpenAI) {
+  state.providers.push(clone(OPENAI_DEFAULT));
+  const butler = state.bots.find((bot) => bot.id === "butler");
+  if (!butler.providerId) butler.providerId = OPENAI_DEFAULT.id;
+}
 const ui = {
   activeId: device.activeId || null,
-  selectedBot: "butler",
+  selectedBot: device.selectedBot || "butler",
   mode: "auto",
   sidebar: false,
   draft: "",
@@ -117,7 +128,22 @@ const ui = {
   syncStatus: device.lastSync ? "synced" : "local",
   syncError: "",
   forceRoute: false,
-  editingProvider: null,
+  editingProvider:
+    seededOpenAI ||
+    (state.providers.filter((provider) => !provider.deletedAt).length === 1 &&
+      state.providers.some(
+        (provider) => provider.id === OPENAI_DEFAULT.id && !provider.deletedAt,
+      ) &&
+      !getSecrets().models?.[OPENAI_DEFAULT.id]?.key)
+      ? OPENAI_DEFAULT.id
+      : null,
+  expandedBots: new Set(
+    [
+      device.selectedBot || "butler",
+      state.conversations.find((chat) => chat.id === device.activeId)?.ownerBotId,
+    ].filter(Boolean),
+  ),
+  drafts: {},
 };
 let syncTimer,
   toastTimer,
@@ -137,13 +163,32 @@ const bots = () =>
 const providers = () => state.providers.filter((provider) => !provider.deletedAt);
 const chats = () =>
   state.conversations
-    .filter((chat) => !chat.deletedAt && chat.messages.length)
+    .filter((chat) => !chat.deletedAt)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 const currentChat = () =>
   state.conversations.find((chat) => chat.id === ui.activeId && !chat.deletedAt);
 const getBot = (id) =>
   bots().find((bot) => bot.id === id) || bots().find((bot) => bot.id === "butler");
-const activeBot = () => getBot(currentChat()?.botId || ui.selectedBot);
+const ownerOf = (chat) => chat.ownerBotId || chat.botId;
+function memberFor(id) {
+  const live = bots().find((bot) => bot.id === id);
+  if (live) return live;
+  const deleted = state.bots.find((bot) => bot.id === id);
+  const chat = chats().find((item) => ownerOf(item) === id);
+  const profile = chat?.profileSnapshot;
+  return {
+    ...(deleted || getBot("butler")),
+    id,
+    archived: true,
+    name:
+      deleted?.name ||
+      profile?.name ||
+      chat?.messages.find((message) => message.botId === id && message.botName)?.botName ||
+      "历史成员",
+    avatarData: deleted?.avatarData || "",
+  };
+}
+const activeBot = () => memberFor(currentChat() ? ownerOf(currentChat()) : ui.selectedBot);
 const mode = () => currentChat()?.mode || ui.mode;
 function modelForBot(bot) {
   return (
@@ -260,12 +305,28 @@ function markdown(content) {
   return fragment.innerHTML;
 }
 function avatar(bot) {
-  return `<span class="avatar ${esc(bot.color)}">${icon(bot.icon)}</span>`;
+  return `<span class="avatar ${esc(bot.color)}">${bot.avatarData ? `<img src="${esc(bot.avatarData)}" alt="${esc(bot.name)}的头像">` : icon(bot.icon)}</span>`;
+}
+function renderMemberGroups() {
+  const members = [...bots()];
+  for (const chat of chats())
+    if (!members.some((member) => member.id === ownerOf(chat)))
+      members.push(memberFor(ownerOf(chat)));
+  return members
+    .map((member) => {
+      const sessions = chats().filter((chat) => ownerOf(chat) === member.id);
+      const expanded = ui.expandedBots.has(member.id);
+      return `<section class="member-group" data-member="${member.id}"><div class="member-row">
+      <button class="icon-button member-expand ${expanded ? "expanded" : ""}" data-expand-bot="${member.id}" aria-label="${expanded ? "收起" : "展开"}${esc(member.name)}的会话" aria-expanded="${expanded}">${icon("chevron-down")}</button>
+      <button class="bot-nav ${activeBot().id === member.id ? "active" : ""}" data-bot="${member.id}">${avatar(member)}<span>${esc(member.name)}${member.archived ? "<small>已移除成员</small>" : ""}</span></button>
+      ${member.archived ? "" : `<button class="icon-button member-new" data-new-bot="${member.id}" aria-label="与${esc(member.name)}新建会话">${icon("plus")}</button><button class="icon-button member-edit" data-edit-bot="${member.id}" aria-label="编辑${esc(member.name)}">${icon("pencil")}</button>`}
+    </div><div class="member-sessions" ${expanded ? "" : "hidden"}>${sessions.map((chat) => `<div class="history-item ${ui.activeId === chat.id ? "active" : ""}"><button data-chat="${chat.id}" title="${esc(chat.title)}">${icon("message-square")}<span>${esc(chat.title)}</span></button><button class="delete-chat icon-button" data-delete-chat="${chat.id}" aria-label="删除会话：${esc(chat.title)}">${icon("trash-2")}</button></div>`).join("")}</div></section>`;
+    })
+    .join("");
 }
 function render() {
   const bot = activeBot(),
     conversation = currentChat(),
-    allChats = chats(),
     provider = modelForBot(bot);
   const syncLabels = {
     local: "本地保存",
@@ -276,23 +337,16 @@ function render() {
   };
   app.innerHTML = `<button class="sidebar-overlay ${ui.sidebar ? "visible" : ""}" data-action="close-sidebar" aria-label="关闭侧栏"></button>
   <aside class="sidebar ${ui.sidebar ? "open" : ""}" aria-label="角色和历史对话">
-    <a class="brand" href="#" data-action="new"><span class="brand-mark">✦</span><span>AI Bot</span></a>
+    <a class="brand" href="#" data-action="home"><span class="brand-mark">✦</span><span>AI Bot</span></a>
     <button class="new-chat" data-action="new">${icon("plus")}<span>新对话</span></button>
     <div class="nav-label">我的团队<button class="icon-button" data-action="add-bot" aria-label="添加角色">${icon("plus")}</button></div>
-    <nav class="team-nav">${bots()
-      .map(
-        (item) =>
-          `<div class="bot-nav-wrap"><button class="bot-nav ${bot.id === item.id ? "active" : ""}" data-bot="${item.id}" ${bot.id === item.id ? 'aria-current="true"' : ""}>${avatar(item)}<span>${esc(item.name)}</span></button><button class="edit-bot icon-button" data-edit-bot="${item.id}" aria-label="编辑${esc(item.name)}">${icon("pencil")}</button></div>`,
-      )
-      .join("")}</nav>
-    <div class="nav-label history-label">最近对话 <span>${allChats.length || ""}</span></div>
-    <div class="history-list">${allChats.length ? allChats.map((chat) => `<div class="history-item ${ui.activeId === chat.id ? "active" : ""}"><button data-chat="${chat.id}" title="${esc(chat.title)}">${icon("message-square")}<span>${esc(chat.title)}</span></button><button class="delete-chat icon-button" data-delete-chat="${chat.id}" aria-label="删除会话：${esc(chat.title)}">${icon("trash-2")}</button></div>`).join("") : ""}</div>
+    <nav class="member-list" aria-label="成员与会话">${renderMemberGroups()}</nav>
     <div class="sidebar-bottom"><button class="bottom-button" data-action="settings">${icon("settings-2")}<span>设置与连接</span></button></div>
   </aside>
-  <main class="main ${conversation?.messages.length ? "" : "is-empty"}"><header class="topbar"><button class="mobile-menu icon-button" data-action="open-sidebar" aria-label="打开角色和历史对话">${icon("menu")}</button><div class="breadcrumb"><strong>${esc(bot.name)}</strong>${conversation ? `<button class="icon-button title-edit" data-action="rename" aria-label="重命名会话">${icon("pencil")}</button>` : ""}</div><div class="topbar-actions"><span class="save-badge ${ui.syncStatus === "error" ? "error" : ""}" title="${esc(ui.syncError)}">${ui.syncStatus === "synced" ? icon("check") : ""}${syncLabels[ui.syncBusy ? "syncing" : ui.syncStatus]}</span><button class="text-button sync-button" data-action="${device.repository ? "sync" : "github-settings"}" ${ui.syncBusy ? "disabled" : ""}>${icon(device.repository ? "refresh-cw" : "cloud", ui.syncBusy ? "spin" : "")}<span>${device.repository ? "同步" : "连接 GitHub"}</span></button></div></header>
+  <main class="main ${conversation?.messages.length ? "" : "is-empty"}"><header class="topbar"><button class="mobile-menu icon-button" data-action="open-sidebar" aria-label="打开角色和历史对话">${icon("menu")}</button><div class="chat-contact">${avatar(bot)}<div><strong>${esc(bot.name)}</strong><div class="session-caption">${conversation ? esc(conversation.title) : "新会话"}${conversation ? `<button class="icon-button title-edit" data-action="rename" aria-label="重命名会话">${icon("pencil")}</button>` : ""}</div></div>${bot.archived ? "" : `<button class="icon-button contact-settings" data-edit-bot="${bot.id}" aria-label="成员资料">${icon("settings-2")}</button>`}</div><div class="topbar-actions">${conversation && !bot.archived ? `<button class="text-button memory-button" data-action="summarize" title="生成经验总结草稿">${icon("lightbulb")}<span>总结经验</span></button>` : ""}<span class="save-badge ${ui.syncStatus === "error" ? "error" : ""}" title="${esc(ui.syncError)}">${ui.syncStatus === "synced" ? icon("check") : ""}${syncLabels[ui.syncBusy ? "syncing" : ui.syncStatus]}</span><button class="text-button sync-button" data-action="${device.repository ? "sync" : "github-settings"}" ${ui.syncBusy ? "disabled" : ""}>${icon(device.repository ? "refresh-cw" : "cloud", ui.syncBusy ? "spin" : "")}<span>${device.repository ? "同步" : "连接 GitHub"}</span></button></div></header>
   ${bootError ? `<div class="notice error-notice">${esc(bootError)} <button data-action="raw-backup">导出原始备份</button></div>` : ""}
   <section class="chat-area" aria-label="聊天内容">${conversation?.messages.length ? `<div class="messages">${conversation.messages.map(renderMessage).join("")}</div>` : ""}</section>
-  <div class="composer-wrap">${ui.routing ? `<div class="activity-line">${icon("sparkles")}管家正在邀请合适的伙伴…</div>` : ""}<form class="composer" id="composer"><textarea id="message-input" aria-label="输入消息" placeholder="输入消息…" rows="2" maxlength="30000" ${ui.busy ? "disabled" : ""}>${esc(ui.draft)}</textarea><div class="composer-tools"><button class="route-chip" type="button" data-action="route-toggle" title="${mode() === "auto" ? "点击固定当前角色" : "点击交给管家自动分配"}">${icon(mode() === "auto" ? "sparkles" : bot.icon)}${mode() === "auto" ? "管家自动分配" : esc(bot.name)}${icon("chevron-down")}</button><div><button class="model-note" type="button" data-action="settings" title="配置模型">${provider ? esc(provider.name) : "选择模型"}${icon("chevron-down")}</button><button class="send-button" type="${ui.busy ? "button" : "submit"}" ${ui.busy ? 'data-action="stop"' : ""} aria-label="${ui.busy ? "停止生成" : "发送消息"}">${icon(ui.busy ? "square" : "arrow-up")}</button></div></div></form></div></main>`;
+  <div class="composer-wrap">${ui.routing ? `<div class="activity-line">${icon("sparkles")}管家正在邀请合适的伙伴…</div>` : ""}<form class="composer" id="composer"><textarea id="message-input" aria-label="输入消息" placeholder="输入消息…" rows="2" maxlength="30000" ${ui.busy ? "disabled" : ""}>${esc(ui.draft)}</textarea><div class="composer-tools"><button class="route-chip" type="button" ${bot.id === "butler" ? 'data-action="route-toggle"' : "disabled"} title="${mode() === "auto" ? "点击固定当前角色" : "点击交给管家自动分配"}">${icon(bot.id === "butler" && mode() === "auto" ? "sparkles" : bot.icon)}${bot.id === "butler" && mode() === "auto" ? "管家自动分配" : esc(bot.name)}${bot.id === "butler" ? icon("chevron-down") : ""}</button><div><button class="model-note" type="button" data-action="settings" title="配置模型">${provider ? esc(provider.name) : "选择模型"}${icon("chevron-down")}</button><button class="send-button" type="${ui.busy ? "button" : "submit"}" ${ui.busy ? 'data-action="stop"' : ""} aria-label="${ui.busy ? "停止生成" : "发送消息"}">${icon(ui.busy ? "square" : "arrow-up")}</button></div></div></form></div></main>`;
   icons();
   const input = document.querySelector("#message-input");
   input.addEventListener("input", () => {
@@ -340,30 +394,46 @@ function renderStream(message) {
 }
 function chooseBot(id) {
   if (ui.busy) return toast("请先停止当前回答，再切换角色");
-  const bot = getBot(id);
+  rememberDraft();
+  const bot = memberFor(id);
   ui.selectedBot = bot.id;
   ui.mode = bot.id === "butler" ? "auto" : "manual";
-  ui.forceRoute = bot.id === "butler";
+  ui.forceRoute = false;
   ui.sidebar = false;
-  const chat = currentChat();
-  if (chat) {
-    chat.botId = bot.id;
-    chat.mode = ui.mode;
-    chat.updatedAt = now();
-    persist();
-  }
+  const sessions = chats().filter((chat) => ownerOf(chat) === bot.id);
+  const chat = sessions.find((item) => item.id === device.lastByBot?.[bot.id]) || sessions[0];
+  ui.activeId = chat?.id || null;
+  ui.expandedBots.add(bot.id);
+  ui.draft = ui.drafts[ui.activeId || `new:${bot.id}`] || "";
+  rememberSelection();
   render();
   if (chat) scrollBottom();
 }
-function newChat() {
+function rememberDraft() {
+  ui.drafts[ui.activeId || `new:${ui.selectedBot}`] = ui.draft;
+}
+function rememberSelection() {
+  device.activeId = ui.activeId;
+  device.selectedBot = ui.selectedBot;
+  if (ui.activeId) device.lastByBot = { ...device.lastByBot, [ui.selectedBot]: ui.activeId };
+  rememberDevice();
+}
+function newChat(botId = activeBot().id) {
   if (ui.busy) return toast("请先停止当前回答");
-  ui.activeId = null;
-  ui.selectedBot = "butler";
-  ui.mode = "auto";
+  const bot = bots().find((item) => item.id === botId);
+  if (!bot) return toast("这位成员已移除，请选择其他成员开始新会话");
+  rememberDraft();
+  const chat = createConversation(bot);
+  state.conversations.push(chat);
+  ui.activeId = chat.id;
+  ui.selectedBot = bot.id;
+  ui.mode = chat.mode;
+  ui.forceRoute = false;
   ui.draft = "";
   ui.sidebar = false;
-  device.activeId = null;
-  rememberDevice();
+  ui.expandedBots.add(bot.id);
+  rememberSelection();
+  persist();
   render();
   document.querySelector("#message-input").focus();
 }
@@ -387,17 +457,34 @@ async function sendMessage(retryMessageId) {
     toast("先添加一个模型连接，输入的消息已经保留");
     return;
   }
+  const configured = modelForBot(activeBot());
+  if (
+    configured?.baseUrl === OPENAI_DEFAULT.baseUrl &&
+    !getSecrets().models?.[configured.id]?.key
+  ) {
+    ui.editingProvider = configured.id;
+    showSettings("models");
+    return toast("OpenAI 接口已配置，请填写你的 API Key 后开始聊天");
+  }
   if (!conversation) {
-    conversation = createConversation(ui.selectedBot);
+    const selected = bots().find((bot) => bot.id === ui.selectedBot);
+    if (!selected) return toast("这位成员已移除，请选择其他成员开始会话");
+    conversation = createConversation(selected);
     conversation.mode = ui.mode;
     state.conversations.push(conversation);
     ui.activeId = conversation.id;
-    device.activeId = conversation.id;
-    rememberDevice();
+    ui.expandedBots.add(selected.id);
+    rememberSelection();
   }
+  if (!conversation.profileSnapshot) {
+    const original = bots().find((bot) => bot.id === ownerOf(conversation));
+    if (!original) return toast("这段历史会话的成员已移除，请选择管家或其他成员新建会话");
+    conversation.profileSnapshot = snapshotProfile(original);
+  }
+  let requestedUser = retryUser;
   if (!retryUser) {
     const timestamp = now();
-    conversation.messages.push({
+    requestedUser = {
       id: uid(),
       role: "user",
       content,
@@ -408,7 +495,8 @@ async function sendMessage(retryMessageId) {
       updatedAt: timestamp,
       status: "complete",
       error: "",
-    });
+    };
+    conversation.messages.push(requestedUser);
     if (conversation.messages.filter((m) => m.role === "user").length === 1)
       conversation.title = content.replace(/\s+/g, " ").slice(0, 32);
     ui.draft = "";
@@ -434,8 +522,8 @@ async function sendMessage(retryMessageId) {
   render();
   scrollBottom();
   try {
-    let bot = getBot(previous?.botId || conversation.botId);
-    if (!retryUser && conversation.mode === "auto") {
+    let bot = memberFor(ownerOf(conversation));
+    if (!retryUser && ownerOf(conversation) === "butler" && conversation.mode === "auto") {
       let targetId = routeByKeywords(content, bots(), bot.id);
       if (
         (conversation.messages.filter((m) => m.role === "user").length === 1 || ui.forceRoute) &&
@@ -460,13 +548,33 @@ async function sendMessage(retryMessageId) {
         }
       }
       bot = getBot(targetId);
-      conversation.botId = bot.id;
+      if (bot.id !== "butler") {
+        const source = conversation;
+        const currentUser = requestedUser;
+        conversation = createConversation(bot);
+        conversation.sourceConversationId = source.id;
+        conversation.handoffContext = clone(
+          [
+            ...(source.handoffContext || []),
+            ...source.messages.filter((message) => message.id !== currentUser.id),
+          ].slice(-40),
+        );
+        conversation.messages = [clone(currentUser)];
+        conversation.title = currentUser.content.replace(/\s+/g, " ").slice(0, 32);
+        state.conversations.push(conversation);
+        ui.activeId = conversation.id;
+        ui.selectedBot = bot.id;
+        ui.expandedBots.add(bot.id);
+        ui.draft = "";
+        rememberSelection();
+        if (!persist({ sync: false })) throw new Error("新会话保存失败，请导出备份后重试");
+      }
       ui.forceRoute = false;
     }
     ui.routing = false;
     const provider = modelForBot(bot);
     const timestamp = now();
-    const user = retryUser || conversation.messages.filter((m) => m.role === "user").at(-1);
+    const user = requestedUser;
     responseMessage = {
       id: uid(),
       role: "assistant",
@@ -484,7 +592,10 @@ async function sendMessage(retryMessageId) {
           ...conversation,
           messages: conversation.messages.slice(0, conversation.messages.indexOf(retryUser) + 1),
         }
-      : conversation;
+      : {
+          ...conversation,
+          messages: [...conversation.messages.filter((message) => message.id !== user.id), user],
+        };
     const messages = promptMessages(contextChat, bot, bots());
     conversation.messages.push(responseMessage);
     persist({ sync: false });
@@ -523,7 +634,7 @@ async function sendMessage(retryMessageId) {
         content: "",
         botId: conversation.botId,
         botName: getBot(conversation.botId).name,
-        replyTo: conversation.messages.filter((m) => m.role === "user").at(-1)?.id || "",
+        replyTo: requestedUser.id,
         createdAt: timestamp,
         updatedAt: timestamp,
         status: "error",
@@ -638,6 +749,7 @@ async function runSync(manual = true) {
 function closeDialog() {
   const dialog = document.querySelector("#app-dialog");
   if (dialog) {
+    dialog.dispatchEvent(new Event("dismiss"));
     dialog.close();
     dialog.remove();
   }
@@ -713,7 +825,10 @@ function modelsSettings() {
           )
           .join("")}</div>`
       : '<div class="setup-note">支持 OpenAI 兼容的 Chat Completions 接口。模型服务需要允许浏览器直接调用。</div>'
-  }<form id="provider-form"><h3>${editing ? "编辑模型连接" : "添加模型连接"}</h3><div class="field-row">${field("连接名称", '<input name="name" required maxlength="80" placeholder="例如：我的主力模型" value="' + esc(editing?.name) + '">')}${field("模型名称", '<input name="model" required maxlength="160" placeholder="供应商提供的模型 ID" value="' + esc(editing?.model) + '">')}</div>${field("接口地址（Base URL）", '<input name="baseUrl" required type="url" placeholder="https://api.example.com/v1" value="' + esc(editing?.baseUrl) + '">', "填 API 地址，不是聊天网页地址。也支持本机 localhost。")}${field("API Key", '<input name="apiKey" type="password" autocomplete="off" placeholder="仅保存在本次浏览器会话，不同步到仓库" value="' + esc(savedKey?.baseUrl === editing?.baseUrl ? savedKey?.key : "") + '">', "密钥可留空，用于不需要认证的本机服务。每台设备分别填写。")}<div class="form-actions">${editing ? '<button class="secondary-button" type="button" data-action="new-provider">取消编辑</button>' : ""}<button class="primary-button" type="submit">${icon("check")}保存连接</button></div></form>`;
+  }<form id="provider-form"><h3>${editing ? "编辑模型连接" : "添加模型连接"}</h3><div class="field-row">${field("连接名称", '<input name="name" required maxlength="80" placeholder="例如：我的主力模型" value="' + esc(editing?.name) + '">')}${field("模型名称", '<input name="model" required maxlength="160" placeholder="供应商提供的模型 ID" value="' + esc(editing?.model) + '">')}</div>${field("接口地址（Base URL）", '<input name="baseUrl" required type="url" placeholder="https://api.example.com/v1" value="' + esc(editing?.baseUrl) + '">', "填 API 地址，不是聊天网页地址。也支持本机 localhost。")}${field("API Key", '<input name="apiKey" type="password" autocomplete="off" placeholder="仅保存在本次浏览器会话，不同步到仓库" value="' + esc(savedKey?.baseUrl === editing?.baseUrl ? savedKey?.key : "") + '">', "密钥可留空，用于不需要认证的本机服务。每台设备分别填写。")}<div class="form-actions">${editing ? '<button class="secondary-button" type="button" data-action="new-provider">取消编辑</button>' : ""}<button class="primary-button" type="submit">${icon("check")}保存连接</button></div></form>${platformLinks()}`;
+}
+function platformLinks() {
+  return `<details class="platform-directory"><summary>常见 AI · 密钥与 API 文档</summary><div>${API_PLATFORMS.map((platform) => `<article><strong>${esc(platform.name)}</strong><div><a href="${platform.keys}" target="_blank" rel="noopener noreferrer">密钥 / 控制台 ${icon("external-link")}</a><a href="${platform.docs}" target="_blank" rel="noopener noreferrer">API 文档 ${icon("external-link")}</a></div><small>${esc(platform.note)}</small></article>`).join("")}</div></details>`;
 }
 function saveProvider(event) {
   event.preventDefault();
@@ -755,7 +870,7 @@ function saveProvider(event) {
   }
 }
 function githubSettings() {
-  return `<div class="setup-note github-note">${icon("github")}<div>网页与聊天数据分开保存。这里连接的必须是 <strong>Private 私有仓库</strong>，可以是空仓库。</div></div><form id="github-form">${field("数据仓库", '<input name="repository" required placeholder="你的用户名/私有数据仓库" value="' + esc(device.repository) + '">')}${field("GitHub 访问令牌", '<input name="token" type="password" required autocomplete="off" placeholder="github_pat_…" value="' + esc(getSecrets().github?.token) + '">', "仅授权这个仓库的 Contents → Read and write。令牌只保存在本次浏览器会话。")}${field("分支（可选）", '<input name="branch" placeholder="留空使用仓库默认分支" value="' + esc(device.branch) + '">')}<div class="help-links"><a href="https://github.com/new" target="_blank" rel="noopener noreferrer">创建私有仓库 ${icon("external-link")}</a><a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer">创建访问令牌 ${icon("external-link")}</a></div><div class="sync-explanation"><strong>同步会怎样工作</strong><p>每轮回答完成后自动保存；打开网页或回到页面时拉取更新。两个设备的新增消息会合并。同步失败时保留本机记录。</p><p>仓库保留历史版本，删除会话不会抹去 Git 历史。模型密钥与 GitHub 令牌不会写入仓库。</p></div>${ui.syncError ? `<div class="inline-error">${esc(ui.syncError)}</div>` : ""}<div class="form-actions">${device.repository ? '<button class="secondary-button" type="button" data-action="disconnect">断开同步</button>' : ""}<button class="primary-button" type="submit" ${ui.syncBusy ? "disabled" : ""}>${icon("refresh-cw")}连接并同步</button></div></form>`;
+  return `<div class="setup-note github-note">${icon("github")}<div>网页与聊天数据分开保存。这里连接的必须是 <strong>Private 私有仓库</strong>，可以是空仓库。</div></div><form id="github-form">${field("数据仓库", '<input name="repository" required placeholder="你的用户名/私有数据仓库" value="' + esc(device.repository || DEFAULT_REPOSITORY) + '">')}${field("GitHub 访问令牌", '<input name="token" type="password" required autocomplete="off" placeholder="github_pat_…" value="' + esc(getSecrets().github?.token) + '">', "仅授权这个仓库的 Contents → Read and write。令牌只保存在本次浏览器会话。")}${field("分支（可选）", '<input name="branch" placeholder="留空使用仓库默认分支" value="' + esc(device.branch) + '">')}<div class="help-links"><a href="https://github.com/new" target="_blank" rel="noopener noreferrer">创建私有仓库 ${icon("external-link")}</a><a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer">创建访问令牌 ${icon("external-link")}</a></div><div class="sync-explanation"><strong>同步会怎样工作</strong><p>每轮回答完成后自动保存；打开网页或回到页面时拉取更新。两个设备的新增消息会合并。同步失败时保留本机记录。</p><p>仓库保留历史版本，删除会话不会抹去 Git 历史。模型密钥与 GitHub 令牌不会写入仓库。</p></div>${ui.syncError ? `<div class="inline-error">${esc(ui.syncError)}</div>` : ""}<div class="form-actions">${device.repository ? '<button class="secondary-button" type="button" data-action="disconnect">断开同步</button>' : ""}<button class="primary-button" type="submit" ${ui.syncBusy ? "disabled" : ""}>${icon("refresh-cw")}连接并同步</button></div></form>`;
 }
 async function connectGitHub(event) {
   event.preventDefault();
@@ -820,75 +935,240 @@ async function importBackup(event) {
     toast(error.message || "备份无法读取，原有记录未改动");
   }
 }
-function editBot(botId) {
-  const bot = botId
-    ? getBot(botId)
-    : {
-        name: "",
-        description: "",
-        prompt: "",
-        keywords: "",
-        color: "violet",
-        icon: "bot",
-        providerId: "",
-      };
+function editBot(botId, generate = false) {
+  const existing = botId ? state.bots.find((bot) => bot.id === botId && !bot.deletedAt) : null;
+  if (botId && !existing) return toast("这位成员已移除");
+  const bot = clone(
+    existing || {
+      name: "",
+      description: "",
+      prompt: "",
+      experience: "",
+      avatarData: "",
+      keywords: "",
+      color: "violet",
+      icon: "bot",
+      providerId: "",
+    },
+  );
+  const source = currentChat() && ownerOf(currentChat()) === botId ? clone(currentChat()) : null;
+  if (ui.sidebar) {
+    ui.sidebar = false;
+    render();
+  }
   const dialog = openDialog(
-    `${heading(botId ? "编辑角色" : "新建 Bot", "角色指令决定它如何思考；模型决定它使用哪种能力。")}<form id="bot-form"><div class="field-row">${field("角色名称", '<input name="name" required maxlength="50" placeholder="例如：写作助手" value="' + esc(bot.name) + '">')}${field("一句话职责", '<input name="description" maxlength="160" placeholder="它最擅长什么" value="' + esc(bot.description) + '">')}</div>${field("角色指令", '<textarea name="prompt" required rows="7" maxlength="30000" placeholder="描述它的专长、工作原则、输出格式和需要遵守的约束。">' + esc(bot.prompt) + "</textarea>")}${field("擅长的关键词", '<input name="keywords" maxlength="1000" placeholder="用逗号分隔，例如：写作,润色,翻译" value="' + esc(bot.keywords) + '">', "帮助管家判断什么时候邀请这个角色。")}<div class="field-row">${field(
-      "使用的模型",
-      '<select name="providerId"><option value="">跟随默认模型</option>' +
-        providers()
-          .map(
-            (p) =>
-              `<option value="${p.id}" ${bot.providerId === p.id ? "selected" : ""}>${esc(p.name)}</option>`,
-          )
-          .join("") +
-        "</select>",
-    )}${field(
-      "角色颜色",
-      '<select name="color">' +
-        [
-          ["violet", "紫色"],
-          ["teal", "青色"],
-          ["blue", "蓝色"],
-          ["amber", "金色"],
-        ]
-          .map(
-            ([value, label]) =>
-              `<option value="${value}" ${bot.color === value ? "selected" : ""}>${label}</option>`,
-          )
-          .join("") +
-        "</select>",
-    )}</div><div class="form-actions">${botId && botId !== "butler" ? `<button class="danger-button" type="button" data-delete-bot="${bot.id}">${icon("trash-2")}删除角色</button>` : ""}<button class="primary-button" type="submit">${icon("check")}保存角色</button></div></form>`,
+    `${heading(botId ? "成员资料" : "新建 Bot")}
+    <form id="bot-form">
+      <div class="avatar-editor"><div id="avatar-preview">${avatar(bot)}</div><label class="secondary-button file-button">上传头像<input id="avatar-file" type="file" accept="image/jpeg,image/png,image/webp" hidden></label><button type="button" class="text-button" id="remove-avatar">移除头像</button><span class="avatar-help">JPG / PNG / WebP</span></div>
+      <div class="field-row">${field("角色名称", `<input name="name" required maxlength="50" placeholder="成员名称" value="${esc(bot.name)}">`)}${field("一句话职责", `<input name="description" maxlength="160" placeholder="它最擅长什么" value="${esc(bot.description)}">`)}</div>
+      ${field("角色指令", `<textarea name="prompt" required rows="5" maxlength="30000" placeholder="描述这位成员的人设、工作方式和约束。">${esc(bot.prompt)}</textarea>`, "新会话会使用当前人设，已有会话保持启动时的人设。")}
+      ${field("经验总结", `<textarea name="experience" rows="5" maxlength="20000" placeholder="记录已确认的偏好、方法和经验，新会话会自动带入。">${esc(bot.experience)}</textarea>`)}
+      <div class="experience-actions"><button class="secondary-button" type="button" id="generate-experience" ${source && source.messages.some((message) => message.role === "assistant" && message.content) ? "" : "disabled"}>${icon("lightbulb")}从当前会话生成</button><span id="summary-status" role="status">生成结果需确认保存</span></div>
+      <div id="summary-draft" hidden>${field("生成的经验草稿", '<textarea id="summary-draft-text" rows="5" readonly></textarea>')}<button class="secondary-button" type="button" id="adopt-summary">采用这份草稿</button></div>
+      ${field("擅长的关键词", `<input name="keywords" maxlength="1000" placeholder="例如：写作,润色,翻译" value="${esc(bot.keywords)}">`, "用于管家分配会话。")}
+      <div class="field-row">${field(
+        "使用的模型",
+        '<select name="providerId"><option value="">跟随默认模型</option>' +
+          providers()
+            .map(
+              (provider) =>
+                `<option value="${provider.id}" ${bot.providerId === provider.id ? "selected" : ""}>${esc(provider.name)}</option>`,
+            )
+            .join("") +
+          "</select>",
+      )}${field(
+        "角色颜色",
+        '<select name="color">' +
+          [
+            ["violet", "紫色"],
+            ["teal", "青色"],
+            ["blue", "蓝色"],
+            ["amber", "金色"],
+          ]
+            .map(
+              ([value, label]) =>
+                `<option value="${value}" ${bot.color === value ? "selected" : ""}>${label}</option>`,
+            )
+            .join("") +
+          "</select>",
+      )}</div>
+      <div class="form-actions">${botId && botId !== "butler" ? `<button class="danger-button" type="button" data-delete-bot="${bot.id}">${icon("trash-2")}删除角色</button>` : ""}<button class="primary-button" type="submit" id="save-member">${icon("check")}保存角色</button></div>
+    </form>`,
     "bot-dialog",
   );
-  dialog.querySelector("#bot-form").addEventListener("submit", (event) => {
+  let avatarData = bot.avatarData || "",
+    uploadVersion = 0,
+    uploading = false,
+    controller = null;
+  const form = dialog.querySelector("#bot-form"),
+    save = dialog.querySelector("#save-member"),
+    generateButton = dialog.querySelector("#generate-experience"),
+    status = dialog.querySelector("#summary-status"),
+    experience = form.elements.experience;
+  const refreshSave = () => {
+    save.disabled = uploading || Boolean(controller);
+  };
+  const cleanup = () => {
+    uploadVersion++;
+    controller?.abort();
+  };
+  dialog.addEventListener("dismiss", cleanup);
+  dialog.addEventListener("close", cleanup);
+  dialog.querySelector("#avatar-file").addEventListener("change", async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const version = ++uploadVersion;
+    uploading = true;
+    refreshSave();
+    try {
+      const result = await prepareAvatar(file);
+      if (!dialog.isConnected || version !== uploadVersion) return;
+      avatarData = result;
+      dialog.querySelector("#avatar-preview").innerHTML = avatar({ ...bot, avatarData });
+      icons();
+    } catch (error) {
+      if (dialog.isConnected && version === uploadVersion) toast(error.message);
+    } finally {
+      if (version === uploadVersion) {
+        uploading = false;
+        refreshSave();
+      }
+      event.target.value = "";
+    }
+  });
+  dialog.querySelector("#remove-avatar").addEventListener("click", () => {
+    uploadVersion++;
+    uploading = false;
+    avatarData = "";
+    refreshSave();
+    dialog.querySelector("#avatar-preview").innerHTML = avatar({ ...bot, avatarData: "" });
+    icons();
+  });
+  dialog.querySelector("#adopt-summary").addEventListener("click", () => {
+    experience.value = dialog.querySelector("#summary-draft-text").value;
+    dialog.querySelector("#summary-draft").hidden = true;
+    status.textContent = "请检查内容，确认后点击保存角色";
+  });
+  generateButton.addEventListener("click", async () => {
+    if (controller) {
+      controller.abort();
+      return;
+    }
+    if (!source) return;
+    if (ui.busy) return toast("请先等当前回答完成");
+    const originalText = experience.value;
+    const draftBot = {
+      ...bot,
+      prompt: form.elements.prompt.value,
+      experience: originalText,
+      providerId: form.elements.providerId.value,
+    };
+    const provider = modelForBot(draftBot);
+    if (!provider) return toast("请先添加模型连接");
+    const request = new AbortController();
+    controller = request;
+    refreshSave();
+    const timeout = setTimeout(() => request.abort(), 120000);
+    generateButton.textContent = "取消生成";
+    status.textContent = "正在整理经验…";
+    try {
+      const content = await summarizeExperience({
+        conversation: source,
+        bot: draftBot,
+        provider,
+        apiKey: keyFor(provider),
+        signal: request.signal,
+      });
+      if (!dialog.isConnected || request.signal.aborted) return;
+      if (experience.value === originalText) {
+        experience.value = content;
+        status.textContent = "总结已生成，请检查后保存";
+      } else {
+        dialog.querySelector("#summary-draft-text").value = content;
+        dialog.querySelector("#summary-draft").hidden = false;
+        status.textContent = "已保留你的编辑，可在下方查看生成草稿";
+      }
+    } catch (error) {
+      if (dialog.isConnected)
+        status.textContent = request.signal.aborted ? "已停止生成，原内容保留" : error.message;
+    } finally {
+      clearTimeout(timeout);
+      controller = null;
+      if (dialog.isConnected) {
+        refreshSave();
+        generateButton.textContent = "从当前会话生成";
+      }
+    }
+  });
+  form.addEventListener("submit", (event) => {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const record = {
+    if (controller || uploading) return;
+    const values = new FormData(form);
+    const record = cleanBot({
       id: botId || uid(),
-      name: String(form.get("name")).trim(),
-      description: String(form.get("description")).trim(),
-      prompt: String(form.get("prompt")).trim(),
-      keywords: String(form.get("keywords")).trim(),
-      providerId: String(form.get("providerId")),
-      color: String(form.get("color")),
+      name: String(values.get("name")).trim(),
+      description: String(values.get("description")).trim(),
+      prompt: String(values.get("prompt")).trim(),
+      experience: String(values.get("experience")).trim(),
+      avatarData,
+      keywords: String(values.get("keywords")).trim(),
+      providerId: String(values.get("providerId")),
+      color: String(values.get("color")),
       icon: bot.icon,
       updatedAt: now(),
       deletedAt: null,
-    };
+    });
     if (!record.name || !record.prompt) return toast("请填写角色名称和指令");
-    if (botId)
-      Object.assign(
-        state.bots.find((b) => b.id === botId),
-        record,
-      );
-    else state.bots.push(record);
-    persist();
+    // Re-read disk before saving; another device or tab may have updated this member while editing.
+    try {
+      const raw = localStorage.getItem("ai-studio:data:v1");
+      if (raw) applyState(mergeStates(state, cleanState(JSON.parse(raw)), lastSavedState));
+    } catch {
+      return toast("本机记录无法读取，请保留当前草稿并导出备份");
+    }
+    const current = botId ? state.bots.find((item) => item.id === botId) : null;
+    if (botId && (!current || current.deletedAt))
+      return toast("这位成员已在其他页面移除，当前草稿未保存");
+    if (current) {
+      for (const key of [
+        "name",
+        "description",
+        "prompt",
+        "experience",
+        "avatarData",
+        "keywords",
+        "providerId",
+        "color",
+        "icon",
+      ]) {
+        const before = bot[key] || "",
+          latest = current[key] || "";
+        if (record[key] === before) record[key] = latest;
+        else if (latest !== before && latest !== record[key])
+          return toast("该成员的同一项资料已在其他页面修改，请先复制当前草稿，再重新打开资料合并");
+      }
+    }
+    const nextBots = botId
+      ? state.bots.map((item) => (item.id === botId ? record : item))
+      : [...state.bots, record];
+    const bytes = new TextEncoder().encode(
+      JSON.stringify(
+        { schemaVersion: state.schemaVersion, bots: nextBots, providers: state.providers },
+        null,
+        2,
+      ),
+    ).length;
+    if (bytes > 900000) return toast("成员资料与头像总量过大，请减少头像或缩短经验总结后再保存");
+    state.bots = nextBots;
+    if (!persist()) return;
+    ui.expandedBots.add(record.id);
     closeDialog();
     render();
-    toast("角色已保存");
+    toast("成员资料已保存，将用于之后的新会话");
   });
+  if (generate && !generateButton.disabled) generateButton.click();
 }
+
 function confirmAction(title, content, action) {
   const dialog = openDialog(
     `${heading(title)}<p class="confirm-copy">${content}</p><div class="form-actions"><button class="secondary-button" data-action="close-dialog">取消</button><button class="danger-solid" id="confirm-action">确认删除</button></div>`,
@@ -924,6 +1204,8 @@ document.addEventListener("click", async (event) => {
     event.preventDefault();
     const action = button.dataset.action;
     if (action === "new") newChat();
+    if (action === "home") chooseBot("butler");
+    if (action === "summarize") editBot(activeBot().id, true);
     if (action === "open-sidebar") {
       ui.sidebar = true;
       render();
@@ -944,6 +1226,7 @@ document.addEventListener("click", async (event) => {
     if (action === "sync") runSync();
     if (action === "rename") renameChat();
     if (action === "route-toggle") {
+      if (activeBot().id !== "butler") return;
       if (ui.busy) return toast("请先停止当前回答");
       const chat = currentChat(),
         next = mode() === "auto" ? "manual" : "auto";
@@ -980,14 +1263,23 @@ document.addEventListener("click", async (event) => {
     }
   }
   if (button.dataset.bot) chooseBot(button.dataset.bot);
+  if (button.dataset.newBot) newChat(button.dataset.newBot);
+  if (button.dataset.expandBot) {
+    const id = button.dataset.expandBot;
+    if (ui.expandedBots.has(id)) ui.expandedBots.delete(id);
+    else ui.expandedBots.add(id);
+    render();
+  }
   if (button.dataset.editBot) editBot(button.dataset.editBot);
   if (button.dataset.chat) {
     if (ui.busy) return toast("请先停止当前回答");
+    rememberDraft();
     ui.activeId = button.dataset.chat;
+    ui.selectedBot = ownerOf(currentChat());
+    ui.expandedBots.add(ui.selectedBot);
     ui.sidebar = false;
-    ui.draft = "";
-    device.activeId = ui.activeId;
-    rememberDevice();
+    ui.draft = ui.drafts[ui.activeId] || "";
+    rememberSelection();
     render();
     scrollBottom();
   }
@@ -1019,7 +1311,7 @@ document.addEventListener("click", async (event) => {
   if (button.dataset.deleteBot) {
     const bot = state.bots.find((b) => b.id === button.dataset.deleteBot);
     if (bot && bot.id !== "butler")
-      confirmAction("删除这个角色？", "已有聊天会保留，后续对话由管家接手。", () => {
+      confirmAction("删除这个角色？", "已有会话会保留在该成员的历史分组中。", () => {
         bot.deletedAt = now();
         bot.updatedAt = now();
         persist();
@@ -1089,6 +1381,7 @@ window.addEventListener("beforeunload", (event) => {
   }
 });
 render();
+if (seededOpenAI) persist({ sync: false, changed: false });
 if (bootError) toast(bootError);
 if (device.repository && getSecrets().github?.token) setTimeout(() => runSync(false), 600);
 
